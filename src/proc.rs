@@ -53,6 +53,8 @@ impl Context {
 
 unsafe extern "C" {
     fn swtch(old: *mut Context, new: *const Context);
+    /// Restore a full TrapFrame and sret to user (userret.S).
+    fn userret(frame: *const crate::trap::TrapFrame, kstack_top: usize) -> !;
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -90,6 +92,9 @@ pub struct Process {
     heap_brk: usize,
     /// Open-file table, indexed by file descriptor.
     fds: [Option<FdEntry>; MAX_FDS],
+    /// For a forked child: the register state to restore on its first run,
+    /// so it resumes exactly where the parent called fork.
+    fork_frame: Option<Box<crate::trap::TrapFrame>>,
     /// Owns the stack allocation; freed when the zombie is reaped.
     _kstack: Box<[u8]>,
 }
@@ -130,27 +135,15 @@ unsafe fn sched_data() -> &'static mut Scheduler {
     unsafe { &mut *SCHED.0.get() }
 }
 
-/// Build a process and publish it to the scheduler as Runnable. All user
-/// fields are baked in *before* the process becomes visible, so a preemption
-/// right after publication can never observe a half-initialized thread.
-fn spawn_inner(
-    name: &'static str,
-    entry: fn(),
-    user_entry: usize,
-    user_sp: usize,
-    user_table: Option<usize>,
-) -> usize {
+/// Build a process, let `configure` fill in its user fields, and publish it
+/// to the scheduler as Runnable. Everything is set *before* the process
+/// becomes visible, so a preemption right after publication can never
+/// observe a half-initialized thread.
+fn spawn_with(name: &'static str, entry: fn(), configure: impl FnOnce(&mut Process)) -> usize {
     let kstack = vec![0u8; KSTACK_SIZE].into_boxed_slice();
     // Stack grows down from the top, 16-byte aligned per the ABI.
     let stack_top = (kstack.as_ptr() as usize + KSTACK_SIZE) & !0xf;
     let pid = NEXT_PID.fetch_add(1, Ordering::Relaxed);
-    let page_table = user_table.unwrap_or_else(crate::vm::kernel_root);
-    // User processes start with an empty heap at USER_HEAP_BASE.
-    let heap_base = if user_table.is_some() {
-        crate::vm::USER_HEAP_BASE
-    } else {
-        0
-    };
 
     let mut proc = Box::new(Process {
         pid,
@@ -159,15 +152,17 @@ fn spawn_inner(
         context: Context::zeroed(),
         entry,
         kstack_top: stack_top,
-        user_entry,
-        user_sp,
-        page_table,
-        user_table,
-        heap_base,
-        heap_brk: heap_base,
+        user_entry: 0,
+        user_sp: 0,
+        page_table: crate::vm::kernel_root(),
+        user_table: None,
+        heap_base: 0,
+        heap_brk: 0,
         fds: [None; MAX_FDS],
+        fork_frame: None,
         _kstack: kstack,
     });
+    configure(&mut proc);
     // Forged context: first swtch into this thread "returns" to
     // thread_entry on the fresh stack.
     proc.context.ra = thread_entry as *const () as usize;
@@ -183,9 +178,20 @@ fn spawn_inner(
     pid
 }
 
+/// Attach a freshly built user address space to a process: its private table,
+/// entry/stack, and an empty heap at `USER_HEAP_BASE`.
+fn attach_user_space(p: &mut Process, table: usize, entry: usize, sp: usize) {
+    p.page_table = table;
+    p.user_table = Some(table);
+    p.user_entry = entry;
+    p.user_sp = sp;
+    p.heap_base = crate::vm::USER_HEAP_BASE;
+    p.heap_brk = crate::vm::USER_HEAP_BASE;
+}
+
 /// Create a kernel thread that starts at `entry`; returns its pid.
 pub fn spawn(name: &'static str, entry: fn()) -> usize {
-    spawn_inner(name, entry, 0, 0, None)
+    spawn_with(name, entry, |_| {})
 }
 
 /// Load a user program into a fresh address space and start it. `prog` is
@@ -231,13 +237,54 @@ pub fn spawn_user(name: &'static str, prog: (usize, usize)) -> usize {
         );
     }
 
-    spawn_inner(
-        name,
-        user_thread_body,
-        USER_TEXT,
-        USER_STACK_TOP,
-        Some(table),
-    )
+    spawn_with(name, user_thread_body, |p| {
+        attach_user_space(p, table, USER_TEXT, USER_STACK_TOP);
+    })
+}
+
+/// Duplicate the calling process: clone its address space, heap bounds, and
+/// open files into a child that returns 0 from fork, while the parent gets
+/// the child's pid. `parent_frame` is the parent's saved register state at
+/// the fork ecall.
+pub fn fork(parent_frame: &crate::trap::TrapFrame) -> usize {
+    let Some((ptable, pbase, pbrk, pfds)) =
+        with_current(|p| (p.page_table, p.heap_base, p.heap_brk, p.fds))
+    else {
+        return usize::MAX; // fork from a kernel thread: unsupported
+    };
+
+    let child_table = crate::vm::clone_user_table(ptable);
+
+    // The child resumes at the same pc with the same registers, except fork
+    // returns 0 in the child.
+    let mut child_frame = Box::new(parent_frame.clone());
+    child_frame.a0 = 0;
+
+    spawn_with("u-fork-child", forkret_body, |p| {
+        attach_user_space(p, child_table, parent_frame.sepc, parent_frame.sp);
+        p.heap_base = pbase;
+        p.heap_brk = pbrk;
+        p.fds = pfds;
+        p.fork_frame = Some(child_frame);
+    })
+}
+
+/// First code a forked child runs: restore the saved frame and drop to user.
+fn forkret_body() {
+    // Keep the frame owned by the process (freed at reap); take only a
+    // pointer to its stable heap allocation, which outlives this borrow and
+    // stays valid across the userret that never returns.
+    let (frame_ptr, kstack_top) = with_current(|p| {
+        let fp = p
+            .fork_frame
+            .as_deref()
+            .expect("forked child without a frame")
+            as *const crate::trap::TrapFrame;
+        (fp, p.kstack_top)
+    })
+    .expect("no current process");
+    riscv::intr_off();
+    unsafe { userret(frame_ptr, kstack_top) }
 }
 
 /// Kernel-side body of a user process: drop to U-mode. The address space is

@@ -266,6 +266,42 @@ pub fn make_user_table() -> usize {
     root
 }
 
+/// Clone a process's user address space into a fresh table: every mapped
+/// page in the private slot-1 subtree is copied into a new frame mapped at
+/// the same virtual address with the same permissions. The kernel mapping is
+/// shared (via [`make_user_table`]), not copied. Used by fork.
+pub fn clone_user_table(parent: usize) -> usize {
+    let child = make_user_table();
+    let l2 = parent as *const usize;
+    let e2 = unsafe { *l2.add(USER_L2_INDEX) };
+    if e2 & PTE_V != 0 {
+        let l1 = pte_to_pa(e2) as *const usize;
+        for i in 0..512 {
+            let e1 = unsafe { *l1.add(i) };
+            if e1 & PTE_V == 0 {
+                continue;
+            }
+            let l0 = pte_to_pa(e1) as *const usize;
+            for j in 0..512 {
+                let e0 = unsafe { *l0.add(j) };
+                if e0 & PTE_V == 0 {
+                    continue;
+                }
+                // Reconstruct the VA from its three indices, copy the frame.
+                let va = (USER_L2_INDEX << 30) | (i << 21) | (j << 12);
+                let perm = e0 & PERM_MASK;
+                let src = pte_to_pa(e0);
+                let dst = kalloc::alloc().expect("clone_user_table: out of pages");
+                unsafe {
+                    core::ptr::copy_nonoverlapping(src as *const u8, dst as *mut u8, PAGE_SIZE);
+                    map_pages(child, va, dst, PAGE_SIZE, perm);
+                }
+            }
+        }
+    }
+    child
+}
+
 /// Free a process page table: the private slot-1 subtree (its level-1 and
 /// level-0 tables and every leaf frame — the user code and stack) plus the
 /// root page. Shared kernel subtrees are left untouched.

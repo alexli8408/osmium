@@ -7,6 +7,7 @@ use crate::riscv::*;
 /// the kernel stack. Field order and `#[repr(C)]` are load-bearing: offsets
 /// must match the assembly (slots 0..30 = x1..x31, then sepc, sstatus).
 #[repr(C)]
+#[derive(Clone)]
 pub struct TrapFrame {
     pub ra: usize,
     pub sp: usize,

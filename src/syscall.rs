@@ -23,6 +23,8 @@ const SYS_OPEN: usize = 8;
 const SYS_FREAD: usize = 9;
 const SYS_CLOSE: usize = 10;
 const SYS_SBRK: usize = 11;
+const SYS_FORK: usize = 12;
+const SYS_WAIT: usize = 13;
 
 /// Longest path SYS_OPEN accepts.
 const PATH_MAX: usize = 64;
@@ -122,6 +124,13 @@ pub fn dispatch(frame: &mut TrapFrame) {
         // Grow the heap by a0 bytes; returns the old break (base of the new
         // region). Pages are mapped lazily on first touch (demand paging).
         SYS_SBRK => proc::sbrk(frame.a0),
+        // Duplicate this process: parent gets the child pid, child gets 0.
+        SYS_FORK => proc::fork(frame),
+        // Block until process a0 finishes.
+        SYS_WAIT => {
+            proc::join(frame.a0);
+            0
+        }
         SYS_CLOSE => {
             if proc::fd_close(frame.a0) {
                 0

@@ -17,6 +17,7 @@ use core::panic::PanicInfo;
 core::arch::global_asm!(include_str!("entry.S"));
 core::arch::global_asm!(include_str!("kernelvec.S"));
 core::arch::global_asm!(include_str!("switch.S"));
+core::arch::global_asm!(include_str!("userret.S"));
 
 #[macro_use]
 mod console;
@@ -281,6 +282,8 @@ extern "C" fn kmain() -> ! {
     proc::spawn_user("u-catfile", user::catfile());
     // heapgrow exercises sbrk + demand paging (each store faults in a page).
     proc::spawn_user("u-heapgrow", user::heapgrow());
+    // forker exercises fork/wait: a user process duplicates itself.
+    proc::spawn_user("u-forker", user::forker());
 
     // Init: wait for the demo workload to finish, verify the system state
     // it should have left behind, then become the interactive shell.

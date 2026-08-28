@@ -65,6 +65,8 @@ fn run_command(line: &str) {
             println!("  fault     spawn the U-mode trespasser (it will be killed)");
             println!("  echoline  run a U-mode program that reads a line and echoes it");
             println!("  uname     print the kernel version (via a U-mode program)");
+            println!("  heapgrow  U-mode sbrk + demand-paging demo");
+            println!("  fork      U-mode fork/wait demo");
             println!("  poweroff  exit QEMU");
             println!("  reboot    reset the machine");
         }
@@ -120,6 +122,14 @@ fn run_command(line: &str) {
         }
         "uname" => {
             let pid = proc::spawn_user("u-uname", user::uname());
+            proc::join(pid);
+        }
+        "heapgrow" => {
+            let pid = proc::spawn_user("u-heapgrow", user::heapgrow());
+            proc::join(pid);
+        }
+        "fork" => {
+            let pid = proc::spawn_user("u-forker", user::forker());
             proc::join(pid);
         }
         "poweroff" => power::poweroff(),

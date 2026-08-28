@@ -311,6 +311,47 @@ user_prog_heapgrow_end:
 "#
 );
 
+global_asm!(
+    r#"
+.section .user, "ax", @progbits
+
+# --- forker: fork a child, wait for it, and print from both. SYS_FORK returns
+#     the child pid to the parent and 0 to the child; both then run the same
+#     code from the same pc, in separate address spaces. SYS_WAIT makes the
+#     ordering deterministic (child prints, then parent). ---
+.global user_prog_forker
+.align 4
+user_prog_forker:
+    li      a7, 12                  # SYS_FORK -> a0 = child pid (parent) / 0 (child)
+    ecall
+    beqz    a0, 1f                  # a0 == 0 -> we are the child
+
+    li      a7, 13                  # SYS_WAIT for the child (a0 = child pid)
+    ecall
+    la      a0, 2f
+    li      a1, 3f - 2f
+    li      a7, 1                   # SYS_WRITE
+    ecall
+    li      a0, 0
+    li      a7, 2                   # SYS_EXIT (parent)
+    ecall
+1:
+    la      a0, 4f
+    li      a1, 5f - 4f
+    li      a7, 1                   # SYS_WRITE
+    ecall
+    li      a0, 0
+    li      a7, 2                   # SYS_EXIT (child)
+    ecall
+2:  .ascii  "forker: parent, child reaped\n"
+3:
+4:  .ascii  "forker: child here, fork returned 0\n"
+5:
+.global user_prog_forker_end
+user_prog_forker_end:
+"#
+);
+
 unsafe extern "C" {
     fn user_prog_greeter();
     fn user_prog_greeter_end();
@@ -326,6 +367,8 @@ unsafe extern "C" {
     fn user_prog_catfile_end();
     fn user_prog_heapgrow();
     fn user_prog_heapgrow_end();
+    fn user_prog_forker();
+    fn user_prog_forker_end();
 }
 
 /// (link address, byte length) of a program's image in the kernel, which the
@@ -364,4 +407,8 @@ pub fn catfile() -> Prog {
 
 pub fn heapgrow() -> Prog {
     image(user_prog_heapgrow, user_prog_heapgrow_end)
+}
+
+pub fn forker() -> Prog {
+    image(user_prog_forker, user_prog_forker_end)
 }

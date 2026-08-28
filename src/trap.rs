@@ -102,8 +102,7 @@ extern "C" fn kerneltrap(frame: &mut TrapFrame) {
     if cause & SCAUSE_INTERRUPT != 0 {
         match code {
             IRQ_S_TIMER => {
-                // Timer module arrives next; a stray tick is not fatal.
-                println!("trap: unexpected timer interrupt");
+                crate::timer::on_tick();
             }
             IRQ_S_EXTERNAL => {
                 println!("trap: unexpected external interrupt");

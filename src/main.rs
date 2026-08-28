@@ -17,9 +17,11 @@ core::arch::global_asm!(include_str!("kernelvec.S"));
 
 #[macro_use]
 mod console;
+mod kalloc;
 mod memlayout;
 mod riscv;
 mod spinlock;
+mod timer;
 mod trap;
 mod uart;
 
@@ -83,6 +85,40 @@ extern "C" fn kmain() -> ! {
     // breakpoint exception and come back from it.
     unsafe { asm!("ebreak") };
     println!("  traps: survived an ebreak round-trip");
+
+    kalloc::init();
+    println!(
+        "  kalloc: {} free pages ({} MiB)",
+        kalloc::free_pages(),
+        kalloc::free_pages() * memlayout::PAGE_SIZE / (1024 * 1024)
+    );
+
+    // Exercise the allocator: pages must come back zeroed and be reusable.
+    {
+        let a = kalloc::alloc().expect("out of pages");
+        let b = kalloc::alloc().expect("out of pages");
+        assert_ne!(a, b);
+        assert!(unsafe { core::slice::from_raw_parts(a as *const u8, memlayout::PAGE_SIZE) }
+            .iter()
+            .all(|&x| x == 0));
+        unsafe {
+            kalloc::free(a);
+            kalloc::free(b);
+        }
+        println!("  kalloc: alloc/free self-test ok");
+    }
+
+    timer::init();
+    intr_on();
+    let start_ticks = timer::ticks();
+    while timer::ticks() < start_ticks + 3 {
+        wfi();
+    }
+    println!(
+        "  timer: {} Hz ticks running, uptime {} ms",
+        timer::TICK_HZ,
+        timer::uptime_ms()
+    );
 
     loop {
         wfi();

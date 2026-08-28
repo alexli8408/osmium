@@ -248,6 +248,69 @@ user_prog_catfile_end:
 "#
 );
 
+global_asm!(
+    r#"
+.section .user, "ax", @progbits
+
+# --- heapgrow: grow the heap with SYS_SBRK, then write to two pages within
+#     the new region. Neither page is mapped until this program first
+#     touches it, so each store faults into the kernel, which demand-maps a
+#     page and resumes us. If demand paging didn't work, the first store
+#     would kill the process and nothing would print. ---
+.global user_prog_heapgrow
+.align 4
+user_prog_heapgrow:
+    li      a0, 8192                # grow by two pages
+    li      a7, 11                  # SYS_SBRK -> a0 = old break (region base)
+    ecall
+    li      t0, -1
+    beq     a0, t0, 2f              # -1 -> sbrk failed
+    mv      s0, a0                  # s0 = heap region base
+
+    li      t0, 0x41                # 'A'
+    sb      t0, 0(s0)               # store into page 0 -> demand fault -> mapped
+    li      t1, 4096
+    add     s1, s0, t1
+    li      t0, 0x42                # 'B'
+    sb      t0, 0(s1)               # store into page 1 -> demand fault -> mapped
+
+    # Read both back onto the stack and print them: proves the pages persist.
+    addi    sp, sp, -16
+    lb      t0, 0(s0)
+    sb      t0, 0(sp)
+    lb      t0, 0(s1)
+    sb      t0, 1(sp)
+    li      t0, 10                  # '\n'
+    sb      t0, 2(sp)
+    la      a0, 3f
+    li      a1, 4f - 3f
+    li      a7, 1                   # SYS_WRITE label
+    ecall
+    mv      a0, sp
+    li      a1, 3
+    li      a7, 1                   # SYS_WRITE "AB\n"
+    ecall
+    addi    sp, sp, 16
+    li      a0, 0
+    li      a7, 2                   # SYS_EXIT
+    ecall
+2:
+    la      a0, 5f
+    li      a1, 6f - 5f
+    li      a7, 1
+    ecall
+    li      a0, 1
+    li      a7, 2                   # SYS_EXIT (failure)
+    ecall
+3:  .ascii  "user: heapgrow demand-paged bytes: "
+4:
+5:  .ascii  "user: heapgrow FAILED (sbrk)\n"
+6:
+.global user_prog_heapgrow_end
+user_prog_heapgrow_end:
+"#
+);
+
 unsafe extern "C" {
     fn user_prog_greeter();
     fn user_prog_greeter_end();
@@ -261,6 +324,8 @@ unsafe extern "C" {
     fn user_prog_echoline_end();
     fn user_prog_catfile();
     fn user_prog_catfile_end();
+    fn user_prog_heapgrow();
+    fn user_prog_heapgrow_end();
 }
 
 /// (link address, byte length) of a program's image in the kernel, which the
@@ -295,4 +360,8 @@ pub fn echoline() -> Prog {
 
 pub fn catfile() -> Prog {
     image(user_prog_catfile, user_prog_catfile_end)
+}
+
+pub fn heapgrow() -> Prog {
+    image(user_prog_heapgrow, user_prog_heapgrow_end)
 }

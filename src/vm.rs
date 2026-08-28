@@ -239,6 +239,10 @@ pub fn switch_to(root: usize) {
 pub const USER_TEXT: usize = 0x4000_0000;
 /// One past the top of a user program's stack (grows down from here).
 pub const USER_STACK_TOP: usize = 0x4100_0000;
+/// Base of the user heap (grows up via sbrk; pages are demand-mapped).
+pub const USER_HEAP_BASE: usize = 0x5000_0000;
+/// Ceiling the user heap may not grow past.
+pub const USER_HEAP_MAX: usize = 0x6000_0000;
 
 /// Top-level (level-2) index reserved for user mappings.
 const USER_L2_INDEX: usize = USER_TEXT >> 30;

@@ -279,6 +279,8 @@ extern "C" fn kmain() -> ! {
     proc::spawn_user("u-uname", user::uname());
     // catfile exercises the file syscalls (open/fread/close) against ramfs.
     proc::spawn_user("u-catfile", user::catfile());
+    // heapgrow exercises sbrk + demand paging (each store faults in a page).
+    proc::spawn_user("u-heapgrow", user::heapgrow());
 
     // Init: wait for the demo workload to finish, verify the system state
     // it should have left behind, then become the interactive shell.

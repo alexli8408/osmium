@@ -83,6 +83,11 @@ pub struct Process {
     page_table: usize,
     /// Some(root) if `page_table` is a private user table to free on reap.
     user_table: Option<usize>,
+    /// Bottom of the user heap (fixed); `heap_brk` is its current top. Pages
+    /// in [heap_base, heap_brk) are mapped lazily, on the first page fault
+    /// that touches them.
+    heap_base: usize,
+    heap_brk: usize,
     /// Open-file table, indexed by file descriptor.
     fds: [Option<FdEntry>; MAX_FDS],
     /// Owns the stack allocation; freed when the zombie is reaped.
@@ -140,6 +145,12 @@ fn spawn_inner(
     let stack_top = (kstack.as_ptr() as usize + KSTACK_SIZE) & !0xf;
     let pid = NEXT_PID.fetch_add(1, Ordering::Relaxed);
     let page_table = user_table.unwrap_or_else(crate::vm::kernel_root);
+    // User processes start with an empty heap at USER_HEAP_BASE.
+    let heap_base = if user_table.is_some() {
+        crate::vm::USER_HEAP_BASE
+    } else {
+        0
+    };
 
     let mut proc = Box::new(Process {
         pid,
@@ -152,6 +163,8 @@ fn spawn_inner(
         user_sp,
         page_table,
         user_table,
+        heap_base,
+        heap_brk: heap_base,
         fds: [None; MAX_FDS],
         _kstack: kstack,
     });
@@ -448,6 +461,53 @@ pub fn fd_close(fd: usize) -> bool {
 /// pointers refer to. Falls back to the kernel table on a kernel thread.
 pub fn current_root() -> usize {
     with_current(|p| p.page_table).unwrap_or_else(crate::vm::kernel_root)
+}
+
+/// Grow (or query, with delta 0) the calling process's heap. Returns the old
+/// break — the base of the freshly reserved region — or `usize::MAX` if the
+/// growth would exceed `USER_HEAP_MAX`. Only positive deltas are supported;
+/// the new pages are mapped lazily by [`service_page_fault`], not here.
+pub fn sbrk(delta: usize) -> usize {
+    with_current(|p| {
+        let old = p.heap_brk;
+        let Some(new) = old.checked_add(delta) else {
+            return usize::MAX;
+        };
+        if new > crate::vm::USER_HEAP_MAX {
+            return usize::MAX;
+        }
+        p.heap_brk = new;
+        old
+    })
+    .unwrap_or(usize::MAX)
+}
+
+/// Try to service a user page fault at `addr` by demand-mapping a heap page.
+/// Returns true if a page was mapped (the faulting instruction should be
+/// retried); false if the fault is not a growable-heap access and the
+/// process should be killed.
+pub fn service_page_fault(addr: usize) -> bool {
+    use crate::memlayout::PAGE_SIZE;
+    use crate::vm::{self, PTE_R, PTE_U, PTE_W};
+
+    let Some((base, brk, table)) = with_current(|p| (p.heap_base, p.heap_brk, p.page_table)) else {
+        return false;
+    };
+    if addr < base || addr >= brk {
+        return false;
+    }
+    let page_va = addr & !(PAGE_SIZE - 1);
+    // A mapped page faulting here would be a permission error, not a missing
+    // page — don't paper over it.
+    if vm::translate(table, page_va).is_some() {
+        return false;
+    }
+    let Some(frame) = crate::kalloc::alloc() else {
+        return false; // out of memory: let the process die
+    };
+    unsafe { vm::map_pages(table, page_va, frame, PAGE_SIZE, PTE_R | PTE_W | PTE_U) };
+    crate::riscv::sfence_vma();
+    true
 }
 
 /// The pid of the calling thread (0 for the scheduler/boot context).

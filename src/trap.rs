@@ -65,6 +65,8 @@ const IRQ_S_EXTERNAL: usize = 9;
 // Exception causes.
 const EXC_BREAKPOINT: usize = 3;
 const EXC_ECALL_USER: usize = 8;
+const EXC_LOAD_PAGE_FAULT: usize = 13;
+const EXC_STORE_PAGE_FAULT: usize = 15;
 
 fn exception_name(code: usize) -> &'static str {
     match code {
@@ -141,6 +143,11 @@ extern "C" fn kerneltrap(frame: &mut TrapFrame) {
             }
             EXC_ECALL_USER => {
                 crate::syscall::dispatch(frame);
+            }
+            EXC_LOAD_PAGE_FAULT | EXC_STORE_PAGE_FAULT
+                if from_user && crate::proc::service_page_fault(stval::read()) =>
+            {
+                // Demand-mapped a heap page; retry the faulting instruction.
             }
             _ if from_user => {
                 // A faulting user process dies; the kernel does not.

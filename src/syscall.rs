@@ -22,6 +22,7 @@ const SYS_UNAME: usize = 7;
 const SYS_OPEN: usize = 8;
 const SYS_FREAD: usize = 9;
 const SYS_CLOSE: usize = 10;
+const SYS_SBRK: usize = 11;
 
 /// Longest path SYS_OPEN accepts.
 const PATH_MAX: usize = 64;
@@ -118,6 +119,9 @@ pub fn dispatch(frame: &mut TrapFrame) {
         SYS_UNAME => sys_uname(frame.a0, frame.a1),
         SYS_OPEN => sys_open(frame.a0, frame.a1),
         SYS_FREAD => sys_fread(frame.a0, frame.a1, frame.a2),
+        // Grow the heap by a0 bytes; returns the old break (base of the new
+        // region). Pages are mapped lazily on first touch (demand paging).
+        SYS_SBRK => proc::sbrk(frame.a0),
         SYS_CLOSE => {
             if proc::fd_close(frame.a0) {
                 0

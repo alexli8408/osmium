@@ -128,3 +128,21 @@ pub fn intr_get() -> bool {
 pub fn wfi() {
     unsafe { asm!("wfi") };
 }
+
+/// Flush the whole TLB on this hart.
+#[inline]
+pub fn sfence_vma() {
+    unsafe { asm!("sfence.vma zero, zero") };
+}
+
+/// Run `f` with sstatus.SUM set, letting S-mode touch U-marked pages.
+/// Restores the previous SUM state (calls may nest).
+pub fn with_sum<T>(f: impl FnOnce() -> T) -> T {
+    let had_sum = sstatus::read() & SSTATUS_SUM != 0;
+    unsafe { sstatus::set(SSTATUS_SUM) };
+    let out = f();
+    if !had_sum {
+        unsafe { sstatus::clear(SSTATUS_SUM) };
+    }
+    out
+}

@@ -24,6 +24,7 @@ mod spinlock;
 mod timer;
 mod trap;
 mod uart;
+mod vm;
 
 use riscv::*;
 
@@ -106,6 +107,24 @@ extern "C" fn kmain() -> ! {
             kalloc::free(b);
         }
         println!("  kalloc: alloc/free self-test ok");
+    }
+
+    vm::init();
+    vm::init_hart();
+    {
+        // Software-walk the live table and check least-privilege held.
+        let root = vm::kernel_root();
+        let (pa, pte) = vm::translate(root, memlayout::text_start()).unwrap();
+        assert_eq!(pa, memlayout::text_start(), "text must be identity-mapped");
+        assert!(pte & vm::PTE_X != 0 && pte & vm::PTE_W == 0, "text must be R-X");
+        let (_, pte) = vm::translate(root, memlayout::rodata_start()).unwrap();
+        assert!(pte & (vm::PTE_W | vm::PTE_X) == 0, "rodata must be R--");
+        let (_, pte) = vm::translate(root, memlayout::data_start()).unwrap();
+        assert!(pte & vm::PTE_W != 0 && pte & vm::PTE_X == 0, "data must be RW-");
+        let (_, pte) = vm::translate(root, memlayout::UART0).unwrap();
+        assert!(pte & vm::PTE_W != 0, "uart must be writable");
+        assert!(vm::translate(root, 0x4000_0000).is_none(), "hole must be unmapped");
+        println!("  vm: translation self-test ok");
     }
 
     timer::init();

@@ -19,6 +19,12 @@ const SYS_GETPID: usize = 4;
 const SYS_SLEEP_MS: usize = 5;
 const SYS_READ: usize = 6;
 const SYS_UNAME: usize = 7;
+const SYS_OPEN: usize = 8;
+const SYS_FREAD: usize = 9;
+const SYS_CLOSE: usize = 10;
+
+/// Longest path SYS_OPEN accepts.
+const PATH_MAX: usize = 64;
 
 /// Longest single transfer we accept across the user boundary.
 const WRITE_MAX: usize = 1024;
@@ -110,6 +116,15 @@ pub fn dispatch(frame: &mut TrapFrame) {
         SYS_GETPID => proc::current_pid(),
         SYS_READ => sys_read(frame.a0, frame.a1),
         SYS_UNAME => sys_uname(frame.a0, frame.a1),
+        SYS_OPEN => sys_open(frame.a0, frame.a1),
+        SYS_FREAD => sys_fread(frame.a0, frame.a1, frame.a2),
+        SYS_CLOSE => {
+            if proc::fd_close(frame.a0) {
+                0
+            } else {
+                ERR
+            }
+        }
         SYS_SLEEP_MS => {
             // Saturate: a0 is user-controlled, so a plain multiply would
             // overflow-panic the kernel on a huge value in debug builds.
@@ -177,6 +192,44 @@ fn sys_uname(ptr: usize, len: usize) -> usize {
     let n = UNAME.len().min(len);
     match copy_to_user(ptr, &UNAME[..n]) {
         Some(written) => written,
+        None => ERR,
+    }
+}
+
+/// Open a ramfs file by name; returns a file descriptor or ERR.
+fn sys_open(path_ptr: usize, path_len: usize) -> usize {
+    if path_len == 0 || path_len > PATH_MAX {
+        return ERR;
+    }
+    let Some(bytes) = copy_from_user(path_ptr, path_len) else {
+        return ERR;
+    };
+    let Ok(name) = core::str::from_utf8(&bytes) else {
+        return ERR;
+    };
+    let Some(file_idx) = crate::fs::lookup(name) else {
+        return ERR;
+    };
+    proc::fd_install(file_idx).unwrap_or(ERR)
+}
+
+/// Read up to `len` bytes from an open fd into a user buffer, advancing the
+/// fd's cursor. Returns the byte count (0 at EOF) or ERR.
+fn sys_fread(fd: usize, ptr: usize, len: usize) -> usize {
+    let Some((file_idx, offset)) = proc::fd_lookup(fd) else {
+        return ERR;
+    };
+    let cap = len.min(WRITE_MAX);
+    if cap == 0 {
+        return 0;
+    }
+    let mut buf = alloc::vec![0u8; cap];
+    let n = crate::fs::read_at(file_idx, offset, &mut buf);
+    match copy_to_user(ptr, &buf[..n]) {
+        Some(written) => {
+            proc::fd_advance(fd, written);
+            written
+        }
         None => ERR,
     }
 }

@@ -184,12 +184,65 @@ user_prog_echoline:
 "#
 );
 
+global_asm!(
+    r#"
+.section .user, "ax", @progbits
+
+# --- catfile: open the ramfs file "motd", read it via SYS_FREAD, write it
+#     to the console, and close it. Exercises the file syscalls with no
+#     blocking, so it runs deterministically in the boot self-tests. ---
+.global user_prog_catfile
+.align 4
+user_prog_catfile:
+    la      a0, 20f                 # path "motd"
+    li      a1, 21f - 20f
+    li      a7, 8                   # SYS_OPEN -> a0 = fd
+    ecall
+    bltz    a0, 3f                  # fd < 0 -> open failed
+    mv      s0, a0                  # save fd
+    addi    sp, sp, -128
+1:
+    mv      a0, s0
+    mv      a1, sp
+    li      a2, 128
+    li      a7, 9                   # SYS_FREAD -> a0 = bytes read
+    ecall
+    blez    a0, 2f                  # 0 -> EOF, <0 -> error
+    mv      a1, a0
+    mv      a0, sp
+    li      a7, 1                   # SYS_WRITE what we read
+    ecall
+    j       1b
+2:
+    addi    sp, sp, 128
+    mv      a0, s0
+    li      a7, 10                  # SYS_CLOSE
+    ecall
+    li      a0, 0
+    li      a7, 2                   # SYS_EXIT (success)
+    ecall
+3:
+    la      a0, 22f
+    li      a1, 23f - 22f
+    li      a7, 1
+    ecall
+    li      a0, 1
+    li      a7, 2                   # SYS_EXIT (failure)
+    ecall
+20: .ascii  "motd"
+21:
+22: .ascii  "catfile: open failed\n"
+23:
+"#
+);
+
 unsafe extern "C" {
     fn user_prog_greeter();
     fn user_prog_trespasser();
     fn user_prog_badsys();
     fn user_prog_uname();
     fn user_prog_echoline();
+    fn user_prog_catfile();
 }
 
 pub fn greeter_addr() -> usize {
@@ -210,4 +263,8 @@ pub fn uname_addr() -> usize {
 
 pub fn echoline_addr() -> usize {
     user_prog_echoline as *const () as usize
+}
+
+pub fn catfile_addr() -> usize {
+    user_prog_catfile as *const () as usize
 }

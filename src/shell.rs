@@ -5,7 +5,7 @@
 
 use alloc::string::String;
 
-use crate::{console, heap, kalloc, memlayout, power, proc, timer, user};
+use crate::{console, fs, heap, kalloc, memlayout, power, proc, timer, user};
 
 const MAX_LINE: usize = 128;
 
@@ -45,7 +45,13 @@ fn read_line(line: &mut String) {
     }
 }
 
-fn run_command(cmd: &str) {
+fn run_command(line: &str) {
+    // Split off the first whitespace-delimited word as the command; the
+    // remainder (trimmed) is the argument.
+    let mut parts = line.splitn(2, char::is_whitespace);
+    let cmd = parts.next().unwrap_or("");
+    let arg = parts.next().unwrap_or("").trim();
+
     match cmd {
         "" => {}
         "help" => {
@@ -53,6 +59,8 @@ fn run_command(cmd: &str) {
             println!("  ps        list processes");
             println!("  mem       memory statistics");
             println!("  uptime    time since boot");
+            println!("  ls        list files in the ramfs");
+            println!("  cat FILE  print a ramfs file");
             println!("  greet     spawn the U-mode greeter program");
             println!("  fault     spawn the U-mode trespasser (it will be killed)");
             println!("  echoline  run a U-mode program that reads a line and echoes it");
@@ -60,6 +68,12 @@ fn run_command(cmd: &str) {
             println!("  poweroff  exit QEMU");
             println!("  reboot    reset the machine");
         }
+        "ls" => {
+            for (name, size) in fs::list() {
+                println!("  {size:>6}  {name}");
+            }
+        }
+        "cat" => cat(arg),
         "ps" => {
             println!("  {:<5} {:<12} {}", "PID", "NAME", "STATE");
             for (pid, name, state) in proc::process_list() {
@@ -111,5 +125,29 @@ fn run_command(cmd: &str) {
         "poweroff" => power::poweroff(),
         "reboot" => power::reboot(),
         _ => println!("  unknown command '{cmd}' -- try 'help'"),
+    }
+}
+
+/// Print a ramfs file to the console, reading it in chunks through the same
+/// offset-based read path the file syscalls use.
+fn cat(name: &str) {
+    if name.is_empty() {
+        println!("  usage: cat FILE");
+        return;
+    }
+    let Some(idx) = fs::lookup(name) else {
+        println!("  cat: no such file '{name}'");
+        return;
+    };
+    let mut offset = 0;
+    let mut buf = [0u8; 64];
+    loop {
+        let n = fs::read_at(idx, offset, &mut buf);
+        if n == 0 {
+            break;
+        }
+        // ramfs holds text; lossily render so a stray byte can't wedge output.
+        print!("{}", core::str::from_utf8(&buf[..n]).unwrap_or("?"));
+        offset += n;
     }
 }

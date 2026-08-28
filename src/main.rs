@@ -20,6 +20,7 @@ core::arch::global_asm!(include_str!("switch.S"));
 
 #[macro_use]
 mod console;
+mod fs;
 mod heap;
 mod kalloc;
 mod memlayout;
@@ -171,6 +172,17 @@ extern "C" fn kmain() -> ! {
         );
     }
 
+    fs::init();
+    {
+        // Round-trip a known file through the ramfs read path.
+        let idx = fs::lookup("motd").expect("motd missing");
+        let mut buf = [0u8; 8];
+        let n = fs::read_at(idx, 0, &mut buf);
+        assert_eq!(&buf[..n], b"welcome ", "ramfs read returned wrong bytes");
+        assert!(fs::lookup("nonesuch").is_none(), "phantom file");
+        println!("  fs: ramfs mounted, {} files", fs::list().len());
+    }
+
     plic::init();
     plic::init_hart();
     uart::enable_rx_interrupt();
@@ -241,6 +253,8 @@ extern "C" fn kmain() -> ! {
     proc::spawn_user("u-badsys", user::badsys_addr());
     // uname exercises the kernel->user copy path (SYS_UNAME + copy_to_user).
     proc::spawn_user("u-uname", user::uname_addr());
+    // catfile exercises the file syscalls (open/fread/close) against ramfs.
+    proc::spawn_user("u-catfile", user::catfile_addr());
 
     // Init: wait for the demo workload to finish, verify the system state
     // it should have left behind, then become the interactive shell.

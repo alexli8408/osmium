@@ -22,6 +22,16 @@ use crate::spinlock::{self, pop_off, push_off};
 
 pub const KSTACK_SIZE: usize = 16 * 1024;
 
+/// Open files per process.
+pub const MAX_FDS: usize = 8;
+
+/// One open file: which ramfs file, and the read cursor into it.
+#[derive(Clone, Copy)]
+struct FdEntry {
+    file_idx: usize,
+    offset: usize,
+}
+
 /// Callee-saved register set; layout must match switch.S.
 #[repr(C)]
 #[derive(Default)]
@@ -67,6 +77,8 @@ pub struct Process {
     user_entry: usize,
     /// Physical page backing the U-mode stack, returned to kalloc at reap.
     user_stack: Option<usize>,
+    /// Open-file table, indexed by file descriptor.
+    fds: [Option<FdEntry>; MAX_FDS],
     /// Owns the stack allocation; freed when the zombie is reaped.
     _kstack: Box<[u8]>,
 }
@@ -125,6 +137,7 @@ fn spawn_inner(name: &'static str, entry: fn(), user_entry: usize) -> usize {
         kstack_top: stack_top,
         user_entry,
         user_stack: None,
+        fds: [None; MAX_FDS],
         _kstack: kstack,
     });
     // Forged context: first swtch into this thread "returns" to
@@ -335,6 +348,64 @@ pub fn join(pid: usize) {
         sleep(EXIT_CHAN);
         pop_off();
     }
+}
+
+/// Run `f` on the current process, with interrupts off. Returns None if
+/// there is no current process (only true on the scheduler/boot context).
+fn with_current<T>(f: impl FnOnce(&mut Process) -> T) -> Option<T> {
+    push_off();
+    let s = unsafe { sched_data() };
+    let out = s.current.and_then(|cur| s.procs[cur].as_deref_mut()).map(f);
+    pop_off();
+    out
+}
+
+/// Install file `file_idx` in the calling process's fd table; returns the
+/// new descriptor, or None if the table is full.
+pub fn fd_install(file_idx: usize) -> Option<usize> {
+    with_current(|p| {
+        let fd = p.fds.iter().position(|slot| slot.is_none())?;
+        p.fds[fd] = Some(FdEntry {
+            file_idx,
+            offset: 0,
+        });
+        Some(fd)
+    })
+    .flatten()
+}
+
+/// The (file index, current read offset) an fd refers to, or None if the fd
+/// is not open in the calling process.
+pub fn fd_lookup(fd: usize) -> Option<(usize, usize)> {
+    with_current(|p| {
+        p.fds
+            .get(fd)
+            .copied()
+            .flatten()
+            .map(|e| (e.file_idx, e.offset))
+    })
+    .flatten()
+}
+
+/// Advance an fd's read cursor by `delta`.
+pub fn fd_advance(fd: usize, delta: usize) {
+    with_current(|p| {
+        if let Some(Some(e)) = p.fds.get_mut(fd) {
+            e.offset += delta;
+        }
+    });
+}
+
+/// Close an fd; returns false if it was not open.
+pub fn fd_close(fd: usize) -> bool {
+    with_current(|p| match p.fds.get_mut(fd) {
+        Some(slot @ Some(_)) => {
+            *slot = None;
+            true
+        }
+        _ => false,
+    })
+    .unwrap_or(false)
 }
 
 /// The pid of the calling thread (0 for the scheduler/boot context).

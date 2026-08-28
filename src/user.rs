@@ -352,6 +352,52 @@ user_prog_forker_end:
 "#
 );
 
+global_asm!(
+    r#"
+.section .user, "ax", @progbits
+
+# --- forkexec: the Unix pattern. Fork, and in the child exec the "greeter"
+#     program (replacing the child's image); the parent waits for it. ---
+.global user_prog_forkexec
+.align 4
+user_prog_forkexec:
+    li      a7, 12                  # SYS_FORK
+    ecall
+    beqz    a0, 1f                  # child
+
+    li      a7, 13                  # SYS_WAIT (parent, a0 = child pid)
+    ecall
+    la      a0, 2f
+    li      a1, 3f - 2f
+    li      a7, 1                   # SYS_WRITE
+    ecall
+    li      a0, 0
+    li      a7, 2                   # SYS_EXIT (parent)
+    ecall
+1:
+    la      a0, 4f
+    li      a1, 5f - 4f
+    li      a7, 14                  # SYS_EXEC "greeter" (replaces this image)
+    ecall
+    # exec only returns on failure.
+    la      a0, 6f
+    li      a1, 7f - 6f
+    li      a7, 1
+    ecall
+    li      a0, 1
+    li      a7, 2                   # SYS_EXIT (child, exec failed)
+    ecall
+2:  .ascii  "forkexec: parent, child done\n"
+3:
+4:  .ascii  "greeter"
+5:
+6:  .ascii  "forkexec: exec failed\n"
+7:
+.global user_prog_forkexec_end
+user_prog_forkexec_end:
+"#
+);
+
 unsafe extern "C" {
     fn user_prog_greeter();
     fn user_prog_greeter_end();
@@ -369,6 +415,8 @@ unsafe extern "C" {
     fn user_prog_heapgrow_end();
     fn user_prog_forker();
     fn user_prog_forker_end();
+    fn user_prog_forkexec();
+    fn user_prog_forkexec_end();
 }
 
 /// (link address, byte length) of a program's image in the kernel, which the
@@ -411,4 +459,20 @@ pub fn heapgrow() -> Prog {
 
 pub fn forker() -> Prog {
     image(user_prog_forker, user_prog_forker_end)
+}
+
+pub fn forkexec() -> Prog {
+    image(user_prog_forkexec, user_prog_forkexec_end)
+}
+
+/// Resolve a program name to its image, for the exec syscall.
+pub fn lookup(name: &str) -> Option<Prog> {
+    Some(match name {
+        "greeter" => greeter(),
+        "uname" => uname(),
+        "heapgrow" => heapgrow(),
+        "forker" => forker(),
+        "catfile" => catfile(),
+        _ => return None,
+    })
 }

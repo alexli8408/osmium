@@ -194,11 +194,10 @@ pub fn spawn(name: &'static str, entry: fn()) -> usize {
     spawn_with(name, entry, |_| {})
 }
 
-/// Load a user program into a fresh address space and start it. `prog` is
-/// the (link address, length) of the program's bytes in the kernel image;
-/// they are copied into private pages mapped at `USER_TEXT`, with a stack at
-/// `USER_STACK_TOP`. Returns the new pid.
-pub fn spawn_user(name: &'static str, prog: (usize, usize)) -> usize {
+/// Build a fresh user address space for `prog` = (link address, length):
+/// copy the program image into private pages at `USER_TEXT` (R-X+U) and map
+/// one stack page below `USER_STACK_TOP` (RW+U). Returns the new table.
+fn load_user_image(prog: (usize, usize)) -> usize {
     use crate::memlayout::PAGE_SIZE;
     use crate::vm::{self, PTE_R, PTE_U, PTE_W, PTE_X, USER_STACK_TOP, USER_TEXT};
 
@@ -207,7 +206,6 @@ pub fn spawn_user(name: &'static str, prog: (usize, usize)) -> usize {
 
     let table = vm::make_user_table();
 
-    // Copy the program image into private pages mapped at USER_TEXT (R-X+U).
     let npages = len.div_ceil(PAGE_SIZE);
     for i in 0..npages {
         let page = crate::kalloc::alloc().expect("no page for user text");
@@ -225,7 +223,6 @@ pub fn spawn_user(name: &'static str, prog: (usize, usize)) -> usize {
         }
     }
 
-    // One page of user stack (RW+U) just below USER_STACK_TOP.
     let stack = crate::kalloc::alloc().expect("no page for user stack");
     unsafe {
         vm::map_pages(
@@ -236,10 +233,48 @@ pub fn spawn_user(name: &'static str, prog: (usize, usize)) -> usize {
             PTE_R | PTE_W | PTE_U,
         );
     }
+    table
+}
 
+/// Load a user program into a fresh address space and start it. Returns the
+/// new pid.
+pub fn spawn_user(name: &'static str, prog: (usize, usize)) -> usize {
+    let table = load_user_image(prog);
     spawn_with(name, user_thread_body, |p| {
-        attach_user_space(p, table, USER_TEXT, USER_STACK_TOP);
+        attach_user_space(p, table, crate::vm::USER_TEXT, crate::vm::USER_STACK_TOP);
     })
+}
+
+/// Replace the calling process's image with `prog`: build a fresh address
+/// space, discard the old one, and enter the new program at `USER_TEXT`.
+/// Open files are preserved (Unix semantics). Never returns on success.
+pub fn exec(prog: (usize, usize)) -> ! {
+    use crate::vm::{self, USER_HEAP_BASE, USER_STACK_TOP, USER_TEXT};
+
+    let new_table = load_user_image(prog);
+
+    let (old_table, kstack_top) = with_current(|p| {
+        let old = p.user_table;
+        p.page_table = new_table;
+        p.user_table = Some(new_table);
+        p.user_entry = USER_TEXT;
+        p.user_sp = USER_STACK_TOP;
+        p.heap_base = USER_HEAP_BASE;
+        p.heap_brk = USER_HEAP_BASE;
+        p.fork_frame = None;
+        (old, p.kstack_top)
+    })
+    .expect("exec outside a process");
+
+    // Commit to the new address space with interrupts off, then discard the
+    // old one (now unreachable) and drop to the new program. The kernel map
+    // is in both tables, so kernel code/stack stay addressable throughout.
+    riscv::intr_off();
+    vm::switch_to(new_table);
+    if let Some(old) = old_table {
+        unsafe { vm::free_user_table(old) };
+    }
+    unsafe { enter_user(USER_TEXT, USER_STACK_TOP, kstack_top) }
 }
 
 /// Duplicate the calling process: clone its address space, heap bounds, and

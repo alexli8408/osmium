@@ -25,6 +25,7 @@ const SYS_CLOSE: usize = 10;
 const SYS_SBRK: usize = 11;
 const SYS_FORK: usize = 12;
 const SYS_WAIT: usize = 13;
+const SYS_EXEC: usize = 14;
 
 /// Longest path SYS_OPEN accepts.
 const PATH_MAX: usize = 64;
@@ -131,6 +132,8 @@ pub fn dispatch(frame: &mut TrapFrame) {
             proc::join(frame.a0);
             0
         }
+        // Replace this process's image with the named program.
+        SYS_EXEC => sys_exec(frame.a0, frame.a1),
         SYS_CLOSE => {
             if proc::fd_close(frame.a0) {
                 0
@@ -207,6 +210,25 @@ fn sys_uname(ptr: usize, len: usize) -> usize {
         Some(written) => written,
         None => ERR,
     }
+}
+
+/// Replace the calling process's image with a named program. Returns ERR
+/// only on failure (bad name / unknown program); on success it never
+/// returns, because the process is now running the new program.
+fn sys_exec(name_ptr: usize, name_len: usize) -> usize {
+    if name_len == 0 || name_len > PATH_MAX {
+        return ERR;
+    }
+    let Some(bytes) = copy_from_user(name_ptr, name_len) else {
+        return ERR;
+    };
+    let Ok(name) = core::str::from_utf8(&bytes) else {
+        return ERR;
+    };
+    let Some(prog) = crate::user::lookup(name) else {
+        return ERR;
+    };
+    proc::exec(prog); // diverges on success
 }
 
 /// Open a ramfs file by name; returns a file descriptor or ERR.

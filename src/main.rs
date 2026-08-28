@@ -284,6 +284,8 @@ extern "C" fn kmain() -> ! {
     proc::spawn_user("u-heapgrow", user::heapgrow());
     // forker exercises fork/wait: a user process duplicates itself.
     proc::spawn_user("u-forker", user::forker());
+    // forkexec exercises fork/exec/wait: the child replaces its image.
+    proc::spawn_user("u-forkexec", user::forkexec());
 
     // Init: wait for the demo workload to finish, verify the system state
     // it should have left behind, then become the interactive shell.

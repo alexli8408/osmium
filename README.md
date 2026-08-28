@@ -68,7 +68,10 @@ processes in user mode behind hardware memory protection.
   `open`/`fread`/`close` syscalls on top
 - **Interactive shell** on the serial console — `ps`, `mem`, `uptime`,
   `ls`, `cat FILE`, run-a-user-program (`greet`/`fault`/`echoline`/
-  `uname`), `poweroff`/`reboot`
+  `uname`/`heapgrow`/`fork`), `poweroff`/`reboot`
+- **A userland shell** (`ush`) running as a U-mode process — prompts,
+  reads a line, and launches the named program with fork/exec/wait, all
+  through syscalls; a real userland on top of the kernel
 - **Boot self-tests** for every subsystem, checked in CI by booting the
   kernel headless in QEMU
 
@@ -114,12 +117,22 @@ osmium> ps
 osmium> mem
   phys: 30609 free pages (119 MiB of 128 MiB DRAM)
   heap: 8175 KiB free of 8192 KiB
+osmium> ush
+osh$ uname
+osmium 0.1.0 riscv64
+osh$ nope
+osh: unknown command (try greeter/uname/heapgrow/forker or q)
+osh$ q
+osmium>
 ```
 
-The two U-mode programs above are the system's own proof: the *greeter*
+The two U-mode programs at boot are the system's own proof: the *greeter*
 completes write/sleep/getpid/exit syscalls and terminates cleanly; the
 *trespasser* dereferences kernel memory from user mode and is killed by the
-page-fault path while the kernel keeps running.
+page-fault path while the kernel keeps running. `ush` is a second shell
+running entirely in *user* mode — it reads a command and launches it with
+`fork`/`exec`/`wait`, so `uname` above runs in a forked child that replaced
+its image with the uname program.
 
 ## Building and running
 
@@ -194,8 +207,8 @@ when the process is reaped.
 | `src/proc.rs`        | threads, scheduler, sleep/wakeup, join, fork, fds    |
 | `src/syscall.rs`     | ecall dispatch + user-pointer validation             |
 | `src/fs.rs`          | flat read-only in-memory filesystem                  |
-| `src/user.rs`        | embedded U-mode assembly programs                    |
-| `src/shell.rs`       | interactive console shell                            |
+| `src/user.rs`        | embedded U-mode programs (incl. the userland shell)  |
+| `src/shell.rs`       | interactive kernel console shell                     |
 | `src/power.rs`       | sifive_test poweroff/reboot                          |
 
 ## Design notes

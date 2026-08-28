@@ -103,6 +103,9 @@ extern "C" fn kerneltrap(frame: &mut TrapFrame) {
         match code {
             IRQ_S_TIMER => {
                 crate::timer::on_tick();
+                crate::proc::wakeup(crate::timer::TICK_CHAN);
+                // Last: may deschedule this context for a while.
+                crate::proc::on_tick_preempt();
             }
             IRQ_S_EXTERNAL => {
                 if let Some(irq) = crate::plic::claim() {

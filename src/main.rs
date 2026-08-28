@@ -16,6 +16,7 @@ use core::panic::PanicInfo;
 
 core::arch::global_asm!(include_str!("entry.S"));
 core::arch::global_asm!(include_str!("kernelvec.S"));
+core::arch::global_asm!(include_str!("switch.S"));
 
 #[macro_use]
 mod console;
@@ -23,6 +24,7 @@ mod heap;
 mod kalloc;
 mod memlayout;
 mod plic;
+mod proc;
 mod riscv;
 mod spinlock;
 mod timer;
@@ -171,14 +173,53 @@ extern "C" fn kmain() -> ! {
         timer::uptime_ms()
     );
 
-    // Temporary idle loop until the scheduler exists: echo console input
-    // to prove the PLIC -> UART -> ring buffer path end to end.
-    loop {
-        wfi();
-        while let Some(byte) = console::getchar() {
+    // The ping/pong pair proves cooperative switching round-trips through
+    // swtch; the busy spinners never yield, so the monitor thread can only
+    // ever run again if timer preemption works.
+    proc::spawn("ping", || {
+        for round in 0..3 {
+            println!("  thread ping (pid {}): round {round}", proc::current_pid());
+            proc::yield_now();
+        }
+    });
+    proc::spawn("pong", || {
+        for round in 0..3 {
+            println!("  thread pong (pid {}): round {round}", proc::current_pid());
+            proc::yield_now();
+        }
+    });
+
+    use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    static BUSY: [AtomicUsize; 2] = [AtomicUsize::new(0), AtomicUsize::new(0)];
+    static STOP: AtomicBool = AtomicBool::new(false);
+    proc::spawn("busy0", || {
+        while !STOP.load(Ordering::Relaxed) {
+            BUSY[0].fetch_add(1, Ordering::Relaxed);
+        }
+    });
+    proc::spawn("busy1", || {
+        while !STOP.load(Ordering::Relaxed) {
+            BUSY[1].fetch_add(1, Ordering::Relaxed);
+        }
+    });
+    proc::spawn("monitor", || {
+        timer::sleep_ticks(20);
+        STOP.store(true, Ordering::Relaxed);
+        let (b0, b1) = (BUSY[0].load(Ordering::Relaxed), BUSY[1].load(Ordering::Relaxed));
+        assert!(b0 > 0 && b1 > 0, "a busy thread never ran");
+        println!("  proc: preemptive multitasking verified (busy0={b0}, busy1={b1})");
+    });
+
+    // Interactive placeholder until the shell: echo console input.
+    proc::spawn("echo", || {
+        loop {
+            let byte = console::getchar_blocking();
             print!("{}", byte as char);
         }
-    }
+    });
+
+    println!("  proc: entering scheduler");
+    proc::scheduler();
 }
 
 #[panic_handler]

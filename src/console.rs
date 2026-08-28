@@ -4,7 +4,7 @@
 
 use core::fmt::{self, Write};
 
-use crate::spinlock::SpinLock;
+use crate::spinlock::{self, SpinLock};
 use crate::uart;
 
 struct Console;
@@ -61,12 +61,15 @@ static INPUT: SpinLock<Input> = SpinLock::new(
 /// job. Bytes arriving into a full buffer are dropped.
 pub fn on_input(byte: u8) {
     let byte = if byte == b'\r' { b'\n' } else { byte };
-    let mut input = INPUT.lock();
-    if input.w - input.r < INPUT_CAP {
-        let slot = input.w % INPUT_CAP;
-        input.buf[slot] = byte;
-        input.w += 1;
+    {
+        let mut input = INPUT.lock();
+        if input.w - input.r < INPUT_CAP {
+            let slot = input.w % INPUT_CAP;
+            input.buf[slot] = byte;
+            input.w += 1;
+        }
     }
+    crate::proc::wakeup(input_chan());
 }
 
 /// Pop one byte of console input, or None when the buffer is empty.
@@ -78,6 +81,25 @@ pub fn getchar() -> Option<u8> {
         let byte = input.buf[input.r % INPUT_CAP];
         input.r += 1;
         Some(byte)
+    }
+}
+
+/// Wait channel for console input: the buffer's own address.
+fn input_chan() -> usize {
+    &raw const INPUT as usize
+}
+
+/// Block the calling thread until a byte of input arrives.
+pub fn getchar_blocking() -> u8 {
+    loop {
+        spinlock::push_off();
+        if let Some(byte) = getchar() {
+            spinlock::pop_off();
+            return byte;
+        }
+        // Empty. Sleep atomically w.r.t. the interrupt that fills it.
+        crate::proc::sleep(input_chan());
+        spinlock::pop_off();
     }
 }
 

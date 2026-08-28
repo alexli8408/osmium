@@ -36,6 +36,23 @@ pub fn pop_off() {
     }
 }
 
+/// Exactly one push_off level held? (The scheduler's context-switch
+/// precondition.)
+pub fn holding_one() -> bool {
+    NOFF.load(Ordering::Relaxed) == 1
+}
+
+/// The interrupt-enable intent recorded by the outermost push_off. A thread
+/// saves this across a context switch and restores it with set_intena,
+/// because other threads overwrite the shared cell while it is descheduled.
+pub fn saved_intena() -> bool {
+    INTENA.load(Ordering::Relaxed)
+}
+
+pub fn set_intena(value: bool) {
+    INTENA.store(value, Ordering::Relaxed);
+}
+
 pub struct SpinLock<T> {
     locked: AtomicBool,
     #[allow(dead_code)] // diagnostics

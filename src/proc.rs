@@ -73,10 +73,16 @@ pub struct Process {
     entry: fn(),
     /// Top of the kernel stack; a user process's trap stack starts here.
     kstack_top: usize,
-    /// U-mode entry point, when this process runs user code.
+    /// U-mode entry point (virtual address), when this process runs user code.
     user_entry: usize,
-    /// Physical page backing the U-mode stack, returned to kalloc at reap.
-    user_stack: Option<usize>,
+    /// Initial U-mode stack pointer (virtual address).
+    user_sp: usize,
+    /// Root page table this process runs on. Kernel threads use the shared
+    /// kernel table; user processes get their own (which also maps the
+    /// kernel), stored here and freed at reap.
+    page_table: usize,
+    /// Some(root) if `page_table` is a private user table to free on reap.
+    user_table: Option<usize>,
     /// Open-file table, indexed by file descriptor.
     fds: [Option<FdEntry>; MAX_FDS],
     /// Owns the stack allocation; freed when the zombie is reaped.
@@ -119,14 +125,21 @@ unsafe fn sched_data() -> &'static mut Scheduler {
     unsafe { &mut *SCHED.0.get() }
 }
 
-/// Build a process and publish it to the scheduler as Runnable. `user_entry`
-/// is baked in *before* the process becomes visible, so a preemption right
-/// after publication can never observe a half-initialized user thread.
-fn spawn_inner(name: &'static str, entry: fn(), user_entry: usize) -> usize {
+/// Build a process and publish it to the scheduler as Runnable. All user
+/// fields are baked in *before* the process becomes visible, so a preemption
+/// right after publication can never observe a half-initialized thread.
+fn spawn_inner(
+    name: &'static str,
+    entry: fn(),
+    user_entry: usize,
+    user_sp: usize,
+    user_table: Option<usize>,
+) -> usize {
     let kstack = vec![0u8; KSTACK_SIZE].into_boxed_slice();
     // Stack grows down from the top, 16-byte aligned per the ABI.
     let stack_top = (kstack.as_ptr() as usize + KSTACK_SIZE) & !0xf;
     let pid = NEXT_PID.fetch_add(1, Ordering::Relaxed);
+    let page_table = user_table.unwrap_or_else(crate::vm::kernel_root);
 
     let mut proc = Box::new(Process {
         pid,
@@ -136,7 +149,9 @@ fn spawn_inner(name: &'static str, entry: fn(), user_entry: usize) -> usize {
         entry,
         kstack_top: stack_top,
         user_entry,
-        user_stack: None,
+        user_sp,
+        page_table,
+        user_table,
         fds: [None; MAX_FDS],
         _kstack: kstack,
     });
@@ -157,48 +172,69 @@ fn spawn_inner(name: &'static str, entry: fn(), user_entry: usize) -> usize {
 
 /// Create a kernel thread that starts at `entry`; returns its pid.
 pub fn spawn(name: &'static str, entry: fn()) -> usize {
-    spawn_inner(name, entry, 0)
+    spawn_inner(name, entry, 0, 0, None)
 }
 
-/// Create a process that runs the U-mode code at `entry_va` (which must
-/// lie in the U-mapped `.user` section). Returns its pid.
-pub fn spawn_user(name: &'static str, entry_va: usize) -> usize {
-    spawn_inner(name, user_thread_body, entry_va)
-}
+/// Load a user program into a fresh address space and start it. `prog` is
+/// the (link address, length) of the program's bytes in the kernel image;
+/// they are copied into private pages mapped at `USER_TEXT`, with a stack at
+/// `USER_STACK_TOP`. Returns the new pid.
+pub fn spawn_user(name: &'static str, prog: (usize, usize)) -> usize {
+    use crate::memlayout::PAGE_SIZE;
+    use crate::vm::{self, PTE_R, PTE_U, PTE_W, PTE_X, USER_STACK_TOP, USER_TEXT};
 
-/// Kernel-side body of a user process: build its U-mode stack, then drop
-/// privilege. Runs as an ordinary kernel thread until the sret.
-fn user_thread_body() {
-    let (entry, kstack_top) = {
-        push_off();
-        let s = unsafe { sched_data() };
-        let cur = s.current.expect("user_thread_body outside a thread");
-        let p = s.procs[cur].as_ref().unwrap();
-        let out = (p.user_entry, p.kstack_top);
-        pop_off();
-        out
-    };
-    assert!(entry != 0, "user process with no entry point");
+    let (src, len) = prog;
+    assert!(len > 0, "empty user program");
 
-    // One page of user stack, granted the U bit in place.
-    let ustack = crate::kalloc::alloc().expect("no page for user stack");
+    let table = vm::make_user_table();
+
+    // Copy the program image into private pages mapped at USER_TEXT (R-X+U).
+    let npages = len.div_ceil(PAGE_SIZE);
+    for i in 0..npages {
+        let page = crate::kalloc::alloc().expect("no page for user text");
+        let off = i * PAGE_SIZE;
+        let n = (len - off).min(PAGE_SIZE);
+        unsafe {
+            core::ptr::copy_nonoverlapping((src + off) as *const u8, page as *mut u8, n);
+            vm::map_pages(
+                table,
+                USER_TEXT + off,
+                page,
+                PAGE_SIZE,
+                PTE_R | PTE_X | PTE_U,
+            );
+        }
+    }
+
+    // One page of user stack (RW+U) just below USER_STACK_TOP.
+    let stack = crate::kalloc::alloc().expect("no page for user stack");
     unsafe {
-        crate::vm::protect(
-            crate::vm::kernel_root(),
-            ustack,
-            crate::memlayout::PAGE_SIZE,
-            crate::vm::PTE_R | crate::vm::PTE_W | crate::vm::PTE_U,
+        vm::map_pages(
+            table,
+            USER_STACK_TOP - PAGE_SIZE,
+            stack,
+            PAGE_SIZE,
+            PTE_R | PTE_W | PTE_U,
         );
     }
-    {
-        push_off();
-        let s = unsafe { sched_data() };
-        let cur = s.current.expect("user_thread_body outside a thread");
-        s.procs[cur].as_mut().unwrap().user_stack = Some(ustack);
-        pop_off();
-    }
 
-    unsafe { enter_user(entry, ustack + crate::memlayout::PAGE_SIZE, kstack_top) }
+    spawn_inner(
+        name,
+        user_thread_body,
+        USER_TEXT,
+        USER_STACK_TOP,
+        Some(table),
+    )
+}
+
+/// Kernel-side body of a user process: drop to U-mode. The address space is
+/// already built (spawn_user) and satp already points at it (the scheduler
+/// switched to page_table before running this thread).
+fn user_thread_body() {
+    let (entry, user_sp, kstack_top) =
+        with_current(|p| (p.user_entry, p.user_sp, p.kstack_top)).expect("no current process");
+    assert!(entry != 0, "user process with no entry point");
+    unsafe { enter_user(entry, user_sp, kstack_top) }
 }
 
 /// Drop to U-mode: the sret twin of the M->S handoff in start().
@@ -408,6 +444,12 @@ pub fn fd_close(fd: usize) -> bool {
     .unwrap_or(false)
 }
 
+/// The page table of the calling process — the address space its user
+/// pointers refer to. Falls back to the kernel table on a kernel thread.
+pub fn current_root() -> usize {
+    with_current(|p| p.page_table).unwrap_or_else(crate::vm::kernel_root)
+}
+
 /// The pid of the calling thread (0 for the scheduler/boot context).
 pub fn current_pid() -> usize {
     push_off();
@@ -448,18 +490,11 @@ pub fn scheduler() -> ! {
         // stack, never on the stack being freed.
         for slot in sched.procs.iter_mut() {
             if matches!(slot.as_deref(), Some(p) if p.state == State::Zombie) {
-                if let Some(page) = slot.as_ref().unwrap().user_stack {
-                    unsafe {
-                        // Strip the U bit before the page returns to
-                        // kernel-only circulation.
-                        crate::vm::protect(
-                            crate::vm::kernel_root(),
-                            page,
-                            crate::memlayout::PAGE_SIZE,
-                            crate::vm::PTE_R | crate::vm::PTE_W,
-                        );
-                        crate::kalloc::free(page);
-                    }
+                // Free the private address space (code + stack frames and the
+                // page-table pages). Safe here: the scheduler runs on the
+                // kernel table, so the table being freed is not active.
+                if let Some(table) = slot.as_ref().unwrap().user_table {
+                    unsafe { crate::vm::free_user_table(table) };
                 }
                 *slot = None;
             }
@@ -481,11 +516,16 @@ pub fn scheduler() -> ! {
                 sched.next_slot = idx + 1;
                 sched.current = Some(idx);
                 sched.procs[idx].as_mut().unwrap().state = State::Running;
+                let table = sched.procs[idx].as_ref().unwrap().page_table;
                 let new = &sched.procs[idx].as_ref().unwrap().context as *const Context;
                 let old = &mut sched.scheduler_ctx as *mut Context;
+                // Run the thread on its own address space (which also maps
+                // the kernel), then take the kernel table back on return.
+                crate::vm::switch_to(table);
                 // The thread runs holding this push_off level and gives it
                 // back when it swtches to us again.
                 unsafe { swtch(old, new) };
+                crate::vm::switch_to(crate::vm::kernel_root());
                 let sched = unsafe { sched_data() };
                 sched.current = None;
                 pop_off();

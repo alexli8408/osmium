@@ -48,7 +48,7 @@ fn copy_from_user(ptr: usize, len: usize) -> Option<Vec<u8>> {
         return None;
     }
 
-    let root = vm::kernel_root();
+    let root = proc::current_root();
     let mut page = ptr & !(PAGE_SIZE - 1);
     while page < end {
         let (_, pte) = vm::translate(root, page)?;
@@ -76,7 +76,7 @@ fn copy_to_user(ptr: usize, src: &[u8]) -> Option<usize> {
         return None;
     }
 
-    let root = vm::kernel_root();
+    let root = proc::current_root();
     let mut page = ptr & !(PAGE_SIZE - 1);
     while page < end {
         let (_, pte) = vm::translate(root, page)?;

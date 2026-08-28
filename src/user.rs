@@ -50,6 +50,8 @@ user_prog_greeter:
     ecall
 2:  .ascii  "user: hello from U-mode via ecall! my pid is "
 3:
+.global user_prog_greeter_end
+user_prog_greeter_end:
 
 # --- trespasser: tries to read kernel memory; must die by page fault ---
 .global user_prog_trespasser
@@ -67,6 +69,8 @@ user_prog_trespasser:
     ecall
 4:  .ascii  "user: trespasser about to touch kernel memory...\n"
 5:
+.global user_prog_trespasser_end
+user_prog_trespasser_end:
 
 # --- badsys: feeds hostile arguments to syscalls; the kernel must reject
 #     them (return -1) and stay alive, so this program runs to a clean exit ---
@@ -120,6 +124,8 @@ user_prog_badsys:
 7:
 8:  .ascii  "user: badsys FAILED -- kernel did not reject an arg\n"
 9:
+.global user_prog_badsys_end
+user_prog_badsys_end:
 "#
 );
 
@@ -146,6 +152,8 @@ user_prog_uname:
     li      a0, 0
     li      a7, 2                   # SYS_EXIT
     ecall
+.global user_prog_uname_end
+user_prog_uname_end:
 
 # --- echoline: read one line from the console (SYS_READ) and echo it back
 #     (SYS_WRITE). Demonstrates blocking user input end to end. ---
@@ -181,6 +189,8 @@ user_prog_echoline:
 11:
 12: .ascii  "you typed: "
 13:
+.global user_prog_echoline_end
+user_prog_echoline_end:
 "#
 );
 
@@ -233,38 +243,56 @@ user_prog_catfile:
 21:
 22: .ascii  "catfile: open failed\n"
 23:
+.global user_prog_catfile_end
+user_prog_catfile_end:
 "#
 );
 
 unsafe extern "C" {
     fn user_prog_greeter();
+    fn user_prog_greeter_end();
     fn user_prog_trespasser();
+    fn user_prog_trespasser_end();
     fn user_prog_badsys();
+    fn user_prog_badsys_end();
     fn user_prog_uname();
+    fn user_prog_uname_end();
     fn user_prog_echoline();
+    fn user_prog_echoline_end();
     fn user_prog_catfile();
+    fn user_prog_catfile_end();
 }
 
-pub fn greeter_addr() -> usize {
-    user_prog_greeter as *const () as usize
+/// (link address, byte length) of a program's image in the kernel, which the
+/// loader copies into a fresh user address space.
+type Prog = (usize, usize);
+
+fn image(start: unsafe extern "C" fn(), end: unsafe extern "C" fn()) -> Prog {
+    let s = start as *const () as usize;
+    let e = end as *const () as usize;
+    (s, e - s)
 }
 
-pub fn trespasser_addr() -> usize {
-    user_prog_trespasser as *const () as usize
+pub fn greeter() -> Prog {
+    image(user_prog_greeter, user_prog_greeter_end)
 }
 
-pub fn badsys_addr() -> usize {
-    user_prog_badsys as *const () as usize
+pub fn trespasser() -> Prog {
+    image(user_prog_trespasser, user_prog_trespasser_end)
 }
 
-pub fn uname_addr() -> usize {
-    user_prog_uname as *const () as usize
+pub fn badsys() -> Prog {
+    image(user_prog_badsys, user_prog_badsys_end)
 }
 
-pub fn echoline_addr() -> usize {
-    user_prog_echoline as *const () as usize
+pub fn uname() -> Prog {
+    image(user_prog_uname, user_prog_uname_end)
 }
 
-pub fn catfile_addr() -> usize {
-    user_prog_catfile as *const () as usize
+pub fn echoline() -> Prog {
+    image(user_prog_echoline, user_prog_echoline_end)
+}
+
+pub fn catfile() -> Prog {
+    image(user_prog_catfile, user_prog_catfile_end)
 }

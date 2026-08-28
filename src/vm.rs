@@ -113,6 +113,7 @@ pub unsafe fn map_pages(root: usize, va: usize, pa: usize, size: usize, perm: us
 ///
 /// # Safety
 /// Same contract as [`map_pages`]; the range must already be fully mapped.
+#[allow(dead_code)] // general VM primitive; not currently on any hot path
 pub unsafe fn protect(root: usize, va: usize, size: usize, perm: usize) {
     assert!(va.is_multiple_of(PAGE_SIZE) && size.is_multiple_of(PAGE_SIZE));
     for off in (0..size).step_by(PAGE_SIZE) {
@@ -162,14 +163,11 @@ fn kvmmake() -> usize {
             PTE_R | PTE_X,
         );
         if user_end > user_start {
-            // Embedded user programs: executable *only* from U-mode.
-            map_pages(
-                root,
-                user_start,
-                user_start,
-                user_end - user_start,
-                PTE_R | PTE_X | PTE_U,
-            );
+            // Embedded user program images: read-only kernel data now — the
+            // loader copies them into each process's private address space,
+            // so the kernel only needs to *read* them (no U bit, or S-mode
+            // couldn't read them with SUM clear; no X, they run elsewhere).
+            map_pages(root, user_start, user_start, user_end - user_start, PTE_R);
         }
         map_pages(
             root,
@@ -209,11 +207,89 @@ pub fn init() {
 pub fn init_hart() {
     let root = kernel_root();
     assert!(root != 0, "init_hart before vm::init");
+    switch_to(root);
+    println!("  vm: sv39 paging on (root table {root:#x})");
+}
+
+/// Point satp at `root` and flush the TLB. Every table this kernel builds
+/// contains the full kernel mapping, so switching is always safe: whatever
+/// kernel code runs next is addressable under the new table.
+pub fn switch_to(root: usize) {
+    assert!(root != 0, "switch_to null root");
     unsafe {
         // Order matters: all table writes must be visible before satp.
         sfence_vma();
         satp::write(SATP_SV39 | (root >> 12));
         sfence_vma();
     }
-    println!("  vm: sv39 paging on (root table {root:#x})");
+}
+
+// --- Per-process address spaces ---------------------------------------------
+//
+// Each user process gets its own root table. The kernel occupies top-level
+// slots 0 (devices + low physical) and 2 (DRAM at 2 GiB); those entries are
+// copied into every process table so the kernel map — trap vector, kernel
+// code/data, all kernel stacks — is reachable with the process's satp
+// active, which is what lets a trap from user mode run kernel code without
+// first swapping page tables. Slot 1 (the 0x4000_0000..0x8000_0000 GiB) is
+// left for user mappings, so a process's private code/stack live in a
+// subtree the kernel never shares.
+
+/// Base virtual address of a user program's code.
+pub const USER_TEXT: usize = 0x4000_0000;
+/// One past the top of a user program's stack (grows down from here).
+pub const USER_STACK_TOP: usize = 0x4100_0000;
+
+/// Top-level (level-2) index reserved for user mappings.
+const USER_L2_INDEX: usize = USER_TEXT >> 30;
+
+/// Create a fresh process page table that shares the kernel mapping. User
+/// mappings added later land in the private slot-1 subtree.
+pub fn make_user_table() -> usize {
+    let root = kalloc::alloc().expect("make_user_table: out of pages");
+    let kroot = kernel_root() as *const usize;
+    let uroot = root as *mut usize;
+    // Copy all top-level entries; the kernel's are shared, and slot 1 is
+    // invalid in the kernel table, so user mappings allocate a fresh
+    // subtree there rather than touching anything shared.
+    for i in 0..512 {
+        unsafe { *uroot.add(i) = *kroot.add(i) };
+    }
+    debug_assert!(
+        unsafe { *kroot.add(USER_L2_INDEX) } & PTE_V == 0,
+        "user slot collides with a kernel mapping"
+    );
+    root
+}
+
+/// Free a process page table: the private slot-1 subtree (its level-1 and
+/// level-0 tables and every leaf frame — the user code and stack) plus the
+/// root page. Shared kernel subtrees are left untouched.
+///
+/// # Safety
+/// `root` must be a table from [`make_user_table`] that is not the active
+/// satp on any hart.
+pub unsafe fn free_user_table(root: usize) {
+    let l2 = root as *const usize;
+    let e2 = unsafe { *l2.add(USER_L2_INDEX) };
+    if e2 & PTE_V != 0 {
+        let l1 = pte_to_pa(e2);
+        let l1p = l1 as *const usize;
+        for i in 0..512 {
+            let e1 = unsafe { *l1p.add(i) };
+            if e1 & PTE_V != 0 {
+                let l0 = pte_to_pa(e1);
+                let l0p = l0 as *const usize;
+                for j in 0..512 {
+                    let e0 = unsafe { *l0p.add(j) };
+                    if e0 & PTE_V != 0 {
+                        unsafe { kalloc::free(pte_to_pa(e0)) }; // leaf frame
+                    }
+                }
+                unsafe { kalloc::free(l0) }; // level-0 table
+            }
+        }
+        unsafe { kalloc::free(l1) }; // level-1 table
+    }
+    unsafe { kalloc::free(root) };
 }

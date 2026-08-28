@@ -272,13 +272,13 @@ extern "C" fn kmain() -> ! {
     // kernel down with it; badsys feeds hostile syscall arguments (out-of-
     // range and wrapping pointers, an overflowing sleep) that the kernel
     // must reject rather than panic on, so it too exits cleanly.
-    proc::spawn_user("u-greeter", user::greeter_addr());
-    proc::spawn_user("u-trespasser", user::trespasser_addr());
-    proc::spawn_user("u-badsys", user::badsys_addr());
+    proc::spawn_user("u-greeter", user::greeter());
+    proc::spawn_user("u-trespasser", user::trespasser());
+    proc::spawn_user("u-badsys", user::badsys());
     // uname exercises the kernel->user copy path (SYS_UNAME + copy_to_user).
-    proc::spawn_user("u-uname", user::uname_addr());
+    proc::spawn_user("u-uname", user::uname());
     // catfile exercises the file syscalls (open/fread/close) against ramfs.
-    proc::spawn_user("u-catfile", user::catfile_addr());
+    proc::spawn_user("u-catfile", user::catfile());
 
     // Init: wait for the demo workload to finish, verify the system state
     // it should have left behind, then become the interactive shell.

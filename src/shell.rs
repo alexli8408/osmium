@@ -104,22 +104,22 @@ fn run_command(line: &str) {
             );
         }
         "greet" => {
-            let pid = proc::spawn_user("u-greeter", user::greeter_addr());
+            let pid = proc::spawn_user("u-greeter", user::greeter());
             println!("  spawned pid {pid}");
         }
         "fault" => {
-            let pid = proc::spawn_user("u-trespasser", user::trespasser_addr());
+            let pid = proc::spawn_user("u-trespasser", user::trespasser());
             println!("  spawned pid {pid}");
         }
         "echoline" => {
             // Join the child so the shell stops reading input while the
             // user program owns the console — otherwise both would race
             // for the same keystrokes.
-            let pid = proc::spawn_user("u-echoline", user::echoline_addr());
+            let pid = proc::spawn_user("u-echoline", user::echoline());
             proc::join(pid);
         }
         "uname" => {
-            let pid = proc::spawn_user("u-uname", user::uname_addr());
+            let pid = proc::spawn_user("u-uname", user::uname());
             proc::join(pid);
         }
         "poweroff" => power::poweroff(),

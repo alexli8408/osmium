@@ -1,0 +1,6 @@
+# Pin the toolchain so builds are reproducible across machines (and CI).
+# Stable is all we need: global_asm!, inline asm, and no_std+alloc are all stable.
+[toolchain]
+channel = "stable"
+components = ["rust-src", "llvm-tools", "clippy", "rustfmt"]
+targets = ["riscv64gc-unknown-none-elf"]

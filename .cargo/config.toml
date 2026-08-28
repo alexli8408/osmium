@@ -1,0 +1,14 @@
+[build]
+target = "riscv64gc-unknown-none-elf"
+
+[target.riscv64gc-unknown-none-elf]
+# medium (medany) code model: the kernel is linked at 0x8000_0000, far outside
+# the ±2 GiB range the default model assumes starts at address 0.
+rustflags = [
+    "-C", "link-arg=-Tlinker.ld",
+    "-C", "code-model=medium",
+]
+# `cargo run` boots the kernel in QEMU's `virt` machine.
+#   -bios none : no OpenSBI; our boot code starts in M-mode at 0x8000_0000
+#   -nographic : serial console on stdio (Ctrl-A X to quit)
+runner = "qemu-system-riscv64 -machine virt -cpu rv64 -m 128M -smp 1 -nographic -bios none -kernel"

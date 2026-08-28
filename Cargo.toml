@@ -1,0 +1,19 @@
+[package]
+name = "osmium"
+version = "0.1.0"
+edition = "2024"
+authors = ["Alex Li <alexli8408@gmail.com>"]
+description = "A RISC-V (RV64GC) operating system kernel written in Rust, no external crates."
+license = "MIT"
+
+# No dependencies — every driver, allocator, and data structure is hand-rolled.
+[dependencies]
+
+# The kernel has no unwinder; a panic halts the hart.
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1

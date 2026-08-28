@@ -30,6 +30,7 @@ mod proc;
 mod riscv;
 mod shell;
 mod spinlock;
+mod sync;
 mod syscall;
 mod timer;
 mod trap;
@@ -241,6 +242,29 @@ extern "C" fn kmain() -> ! {
         );
         assert!(b0 > 0 && b1 > 0, "a busy thread never ran");
         println!("  proc: preemptive multitasking verified (busy0={b0}, busy1={b1})");
+    });
+
+    // Producer/consumer over a bounded blocking channel. Capacity 4 with 20
+    // items forces real blocking on both ends; the consumer's running sum
+    // only reaches 0+1+..+19 == 190 if every item crosses exactly once,
+    // with no loss or duplication under preemption.
+    static CHANNEL: sync::Channel<usize> = sync::Channel::new(4);
+    static SUM: AtomicUsize = AtomicUsize::new(0);
+    proc::spawn("producer", || {
+        for i in 0..20 {
+            CHANNEL.send(i);
+        }
+    });
+    proc::spawn("consumer", || {
+        for _ in 0..20 {
+            SUM.fetch_add(CHANNEL.recv(), Ordering::Relaxed);
+        }
+        assert_eq!(
+            SUM.load(Ordering::Relaxed),
+            190,
+            "channel lost/duplicated items"
+        );
+        println!("  sync: bounded channel producer/consumer verified (sum=190)");
     });
 
     // User mode: the greeter must complete its syscalls and exit; the

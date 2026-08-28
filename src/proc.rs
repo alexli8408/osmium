@@ -33,7 +33,11 @@ pub struct Context {
 
 impl Context {
     pub const fn zeroed() -> Self {
-        Context { ra: 0, sp: 0, s: [0; 12] }
+        Context {
+            ra: 0,
+            sp: 0,
+            s: [0; 12],
+        }
     }
 }
 
@@ -96,7 +100,10 @@ static NEXT_PID: AtomicUsize = AtomicUsize::new(1);
 /// lifetime, and must not create overlapping borrows across swtch calls.
 #[allow(clippy::mut_from_ref)]
 unsafe fn sched_data() -> &'static mut Scheduler {
-    debug_assert!(!riscv::intr_get(), "scheduler state touched with interrupts on");
+    debug_assert!(
+        !riscv::intr_get(),
+        "scheduler state touched with interrupts on"
+    );
     unsafe { &mut *SCHED.0.get() }
 }
 
@@ -188,7 +195,7 @@ fn user_thread_body() {
 /// # Safety
 /// `entry` must be U-executable code and `user_sp` a U-writable stack.
 unsafe fn enter_user(entry: usize, user_sp: usize, kstack_top: usize) -> ! {
-    use crate::riscv::{sepc, sscratch, sstatus, SSTATUS_SPIE, SSTATUS_SPP};
+    use crate::riscv::{SSTATUS_SPIE, SSTATUS_SPP, sepc, sscratch, sstatus};
 
     // No interrupts between arming sscratch and the sret: a trap in that
     // window would take the user path with a half-built state.

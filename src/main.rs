@@ -109,9 +109,11 @@ extern "C" fn kmain() -> ! {
         let a = kalloc::alloc().expect("out of pages");
         let b = kalloc::alloc().expect("out of pages");
         assert_ne!(a, b);
-        assert!(unsafe { core::slice::from_raw_parts(a as *const u8, memlayout::PAGE_SIZE) }
-            .iter()
-            .all(|&x| x == 0));
+        assert!(
+            unsafe { core::slice::from_raw_parts(a as *const u8, memlayout::PAGE_SIZE) }
+                .iter()
+                .all(|&x| x == 0)
+        );
         unsafe {
             kalloc::free(a);
             kalloc::free(b);
@@ -126,14 +128,23 @@ extern "C" fn kmain() -> ! {
         let root = vm::kernel_root();
         let (pa, pte) = vm::translate(root, memlayout::text_start()).unwrap();
         assert_eq!(pa, memlayout::text_start(), "text must be identity-mapped");
-        assert!(pte & vm::PTE_X != 0 && pte & vm::PTE_W == 0, "text must be R-X");
+        assert!(
+            pte & vm::PTE_X != 0 && pte & vm::PTE_W == 0,
+            "text must be R-X"
+        );
         let (_, pte) = vm::translate(root, memlayout::rodata_start()).unwrap();
         assert!(pte & (vm::PTE_W | vm::PTE_X) == 0, "rodata must be R--");
         let (_, pte) = vm::translate(root, memlayout::data_start()).unwrap();
-        assert!(pte & vm::PTE_W != 0 && pte & vm::PTE_X == 0, "data must be RW-");
+        assert!(
+            pte & vm::PTE_W != 0 && pte & vm::PTE_X == 0,
+            "data must be RW-"
+        );
         let (_, pte) = vm::translate(root, memlayout::UART0).unwrap();
         assert!(pte & vm::PTE_W != 0, "uart must be writable");
-        assert!(vm::translate(root, 0x4000_0000).is_none(), "hole must be unmapped");
+        assert!(
+            vm::translate(root, 0x4000_0000).is_none(),
+            "hole must be unmapped"
+        );
         println!("  vm: translation self-test ok");
     }
 
@@ -163,7 +174,10 @@ extern "C" fn kmain() -> ! {
     plic::init();
     plic::init_hart();
     uart::enable_rx_interrupt();
-    println!("  plic: routing uart irq {} to hart 0", memlayout::UART0_IRQ);
+    println!(
+        "  plic: routing uart irq {} to hart 0",
+        memlayout::UART0_IRQ
+    );
 
     timer::init();
     intr_on();
@@ -209,7 +223,10 @@ extern "C" fn kmain() -> ! {
     proc::spawn("monitor", || {
         timer::sleep_ticks(20);
         STOP.store(true, Ordering::Relaxed);
-        let (b0, b1) = (BUSY[0].load(Ordering::Relaxed), BUSY[1].load(Ordering::Relaxed));
+        let (b0, b1) = (
+            BUSY[0].load(Ordering::Relaxed),
+            BUSY[1].load(Ordering::Relaxed),
+        );
         assert!(b0 > 0 && b1 > 0, "a busy thread never ran");
         println!("  proc: preemptive multitasking verified (busy0={b0}, busy1={b1})");
     });

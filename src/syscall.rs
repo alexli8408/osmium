@@ -55,7 +55,11 @@ pub fn dispatch(frame: &mut TrapFrame) {
     let result = match frame.a7 {
         SYS_WRITE => sys_write(frame.a0, frame.a1),
         SYS_EXIT => {
-            println!("syscall: pid {} exited with code {}", proc::current_pid(), frame.a0);
+            println!(
+                "syscall: pid {} exited with code {}",
+                proc::current_pid(),
+                frame.a0
+            );
             proc::exit();
         }
         SYS_YIELD => {

@@ -67,7 +67,10 @@ pub fn alloc() -> Option<usize> {
 /// `pa` must be a page-aligned physical page previously handed out by
 /// [`alloc`] (or DRAM being seeded at init), with no live references into it.
 pub unsafe fn free(pa: usize) {
-    assert!(pa % PAGE_SIZE == 0, "kalloc::free: unaligned page {pa:#x}");
+    assert!(
+        pa.is_multiple_of(PAGE_SIZE),
+        "kalloc::free: unaligned page {pa:#x}"
+    );
     assert!(
         pa >= memlayout::alloc_start() && pa + PAGE_SIZE <= PHYS_TOP,
         "kalloc::free: page {pa:#x} outside allocator range"

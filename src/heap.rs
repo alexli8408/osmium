@@ -60,7 +60,7 @@ const fn align_up(x: usize, align: usize) -> usize {
 pub fn init() {
     let start = memlayout::heap_start();
     let size = memlayout::HEAP_SIZE;
-    assert!(start % ALIGN == 0 && size % ALIGN == 0);
+    assert!(start.is_multiple_of(ALIGN) && size.is_multiple_of(ALIGN));
 
     let block = start as *mut FreeBlock;
     let mut heap = HEAP.lock();
@@ -155,7 +155,8 @@ fn alloc_inner(layout: Layout) -> *mut u8 {
 }
 
 fn dealloc_inner(user_ptr: *mut u8) {
-    let header = unsafe { &*((user_ptr as usize - size_of::<AllocHeader>()) as *const AllocHeader) };
+    let header =
+        unsafe { &*((user_ptr as usize - size_of::<AllocHeader>()) as *const AllocHeader) };
     let start = header.block_start;
     let size = header.block_size;
     let end = start + size;

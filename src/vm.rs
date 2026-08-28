@@ -10,8 +10,8 @@
 //! Everything is mapped at 4 KiB granularity so individual pages (user
 //! stacks, guard pages) can later change permissions in place.
 
-use crate::memlayout::{self, PAGE_SIZE, PHYS_TOP, PLIC, PLIC_SIZE, UART0, VIRT_TEST};
 use crate::kalloc;
+use crate::memlayout::{self, PAGE_SIZE, PHYS_TOP, PLIC, PLIC_SIZE, UART0, VIRT_TEST};
 use crate::riscv::{satp, sfence_vma};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -86,7 +86,11 @@ unsafe fn walk(root: usize, va: usize, alloc: bool) -> Option<*mut usize> {
 /// Caller must ensure the mapping doesn't alias memory in a way that breaks
 /// Rust's guarantees, and that `root` is a valid root table.
 pub unsafe fn map_pages(root: usize, va: usize, pa: usize, size: usize, perm: usize) {
-    assert!(va % PAGE_SIZE == 0 && pa % PAGE_SIZE == 0 && size % PAGE_SIZE == 0);
+    assert!(
+        va.is_multiple_of(PAGE_SIZE)
+            && pa.is_multiple_of(PAGE_SIZE)
+            && size.is_multiple_of(PAGE_SIZE)
+    );
     assert!(size > 0, "map_pages: empty mapping at {va:#x}");
     assert!(perm & PERM_MASK != 0, "map_pages: no permissions");
 
@@ -110,7 +114,7 @@ pub unsafe fn map_pages(root: usize, va: usize, pa: usize, size: usize, perm: us
 /// # Safety
 /// Same contract as [`map_pages`]; the range must already be fully mapped.
 pub unsafe fn protect(root: usize, va: usize, size: usize, perm: usize) {
-    assert!(va % PAGE_SIZE == 0 && size % PAGE_SIZE == 0);
+    assert!(va.is_multiple_of(PAGE_SIZE) && size.is_multiple_of(PAGE_SIZE));
     for off in (0..size).step_by(PAGE_SIZE) {
         let pte_ptr = unsafe { walk(root, va + off, false) }.expect("protect: unmapped va");
         let pte = unsafe { *pte_ptr };
@@ -150,10 +154,22 @@ fn kvmmake() -> usize {
         map_pages(root, VIRT_TEST, VIRT_TEST, PAGE_SIZE, PTE_R | PTE_W);
 
         // Kernel image, tightest permissions per section.
-        map_pages(root, text_start, text_start, text_end - text_start, PTE_R | PTE_X);
+        map_pages(
+            root,
+            text_start,
+            text_start,
+            text_end - text_start,
+            PTE_R | PTE_X,
+        );
         if user_end > user_start {
             // Embedded user programs: executable *only* from U-mode.
-            map_pages(root, user_start, user_start, user_end - user_start, PTE_R | PTE_X | PTE_U);
+            map_pages(
+                root,
+                user_start,
+                user_start,
+                user_end - user_start,
+                PTE_R | PTE_X | PTE_U,
+            );
         }
         map_pages(
             root,
@@ -162,10 +178,22 @@ fn kvmmake() -> usize {
             rodata_end - rodata_start,
             PTE_R,
         );
-        map_pages(root, data_start, data_start, kernel_end - data_start, PTE_R | PTE_W);
+        map_pages(
+            root,
+            data_start,
+            data_start,
+            kernel_end - data_start,
+            PTE_R | PTE_W,
+        );
 
         // Heap + all allocatable DRAM (kernel stacks, page tables, ...).
-        map_pages(root, kernel_end, kernel_end, PHYS_TOP - kernel_end, PTE_R | PTE_W);
+        map_pages(
+            root,
+            kernel_end,
+            kernel_end,
+            PHYS_TOP - kernel_end,
+            PTE_R | PTE_W,
+        );
     }
 
     root

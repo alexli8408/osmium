@@ -21,9 +21,9 @@ processes in user mode behind hardware memory protection.
   M-mode trampoline needed
 - **Physical page allocator** — intrusive free list threaded through the
   free pages themselves; zero metadata overhead, poison-on-free
-- **Sv39 virtual memory** — three-level page tables built by hand,
-  identity-mapped with least privilege per section (text R-X, rodata R--,
-  data RW-, user code R-X+U)
+- **Sv39 virtual memory** — three-level page tables built by hand. The
+  kernel is identity-mapped with least privilege per section (text R-X,
+  rodata R--, data RW-); user processes get their own address spaces.
 - **Kernel heap** — first-fit, address-ordered, coalescing free-list
   allocator implementing `GlobalAlloc`, so the kernel uses `Box`, `Vec`,
   and `String` from the `alloc` crate
@@ -32,15 +32,24 @@ processes in user mode behind hardware memory protection.
   contexts, cooperative `yield` plus timer-driven **preemptive round-robin
   scheduling**, xv6-style `sleep`/`wakeup` channels with lost-wakeup-proof
   check-then-sleep
+- **Synchronization primitives** — a counting semaphore and a bounded
+  blocking channel (`sync.rs`) built on sleep/wakeup, exercised by a
+  producer/consumer self-test that only passes if hand-off under
+  preemption loses and duplicates nothing
+- **Per-process address spaces** — every user process gets its own page
+  table and a program loader copies its image into private pages at a
+  fixed virtual address; the kernel map is shared into every table so
+  traps run without swapping first, and each process's pages are freed on
+  exit. All demo programs run at the same VA in isolated spaces.
 - **User mode** — processes drop to U-privilege with `sret`, call back into
   the kernel through `ecall` syscalls (`write`, `read`, `exit`, `yield`,
   `getpid`, `sleep_ms`, `uname`, `open`, `fread`, `close`), and get
   **killed on faults instead of taking the kernel down**. Both copy
-  directions are validated: `copy_from_user`/`copy_to_user` reject
-  wrapping or out-of-range pointers and prove every touched page carries
-  the U bit (and, for writes, is writable) before touching it under
-  `sstatus.SUM` — a syscall can't be tricked into reading or writing
-  kernel memory
+  directions are validated against the calling process's address space:
+  `copy_from_user`/`copy_to_user` reject wrapping or out-of-range pointers
+  and prove every touched page carries the U bit (and, for writes, is
+  writable) before touching it under `sstatus.SUM` — a syscall can't be
+  tricked into reading or writing kernel memory
 - **Process control** — `join(pid)` blocks until a process finishes, so
   the shell can hand the console to a user program and take it back
 - **In-memory filesystem** — a flat read-only ramfs (`fs.rs`) with an
@@ -134,8 +143,9 @@ QEMU reset (M-mode, 0x80000000)
 | `0x0010_0000`  | sifive_test (poweroff/reboot)       | RW-        |
 | `0x0c00_0000`  | PLIC                                | RW-        |
 | `0x1000_0000`  | UART0 (NS16550A)                    | RW-        |
+| `0x4000_0000`  | user code / stack (per process)     | R-X/RW **+U** |
 | `0x8000_0000`  | kernel `.text`                      | R-X        |
-| …              | `.user` (embedded U-mode programs)  | R-X **+U** |
+| …              | `.user` (program images, source)    | R--        |
 | …              | `.rodata`                           | R--        |
 | …              | `.data`, `.bss`, boot stack         | RW-        |
 | kernel end     | kernel heap (8 MiB)                 | RW-        |
@@ -144,8 +154,10 @@ QEMU reset (M-mode, 0x80000000)
 
 The kernel is identity-mapped (VA = PA) at 4 KiB granularity, which keeps
 the design honest — permissions are real, but enabling `satp` mid-boot
-doesn't move the ground underneath the running code. User stacks are single
-pages granted the U bit in place and stripped of it on reap.
+doesn't move the ground underneath the running code. Each user process
+gets its own page table that shares the kernel mapping but adds private
+code and stack pages in the `0x4000_0000` region; those pages are freed
+when the process is reaped.
 
 ### Code tour
 
@@ -162,8 +174,9 @@ pages granted the U bit in place and stripped of it on reap.
 | `src/trap.rs`        | exception/interrupt dispatch, user-fault isolation   |
 | `src/timer.rs`       | Sstc timer, ticks, `sleep_ticks`                     |
 | `src/kalloc.rs`      | physical page allocator                              |
-| `src/vm.rs`          | Sv39 page tables, kernel mappings, walks             |
+| `src/vm.rs`          | Sv39 page tables, kernel + per-process address spaces |
 | `src/heap.rs`        | `GlobalAlloc` free-list heap                         |
+| `src/sync.rs`        | counting semaphore, bounded blocking channel         |
 | `src/plic.rs`        | PLIC claim/complete driver                           |
 | `src/switch.S`       | `swtch`: callee-saved context switch                 |
 | `src/proc.rs`        | threads, scheduler, sleep/wakeup, join, fd tables    |
@@ -175,11 +188,14 @@ pages granted the U bit in place and stripped of it on reap.
 
 ## Design notes
 
-- **Why identity mapping?** It sidesteps the classic trampoline problem
-  (trap handlers must be mapped at the same VA in every address space)
-  while still exercising everything that matters pedagogically: real page
-  tables, real permission faults, real TLB shootdowns. Privilege separation
-  comes from the U bit rather than separate address spaces.
+- **Identity-mapped kernel, private user spaces.** The kernel is identity-
+  mapped (virtual = physical), which sidesteps the classic trampoline
+  problem: because every process page table *also* contains the full
+  kernel mapping, a trap from user mode can run kernel code immediately,
+  without first switching page tables. User processes still get real
+  isolation — each has its own table, and its private code and stack live
+  in a virtual-address slot the kernel never maps, so two processes at the
+  same virtual address resolve to different physical pages.
 - **Why no external crates?** Every line of the UART driver, the CSR
   accessors, the allocators, and the lock is in this repo. The point of the
   project is that there is no magic underneath.

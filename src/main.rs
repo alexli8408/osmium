@@ -24,8 +24,10 @@ mod heap;
 mod kalloc;
 mod memlayout;
 mod plic;
+mod power;
 mod proc;
 mod riscv;
+mod shell;
 mod spinlock;
 mod syscall;
 mod timer;
@@ -218,12 +220,19 @@ extern "C" fn kmain() -> ! {
     proc::spawn_user("u-greeter", user::greeter_addr());
     proc::spawn_user("u-trespasser", user::trespasser_addr());
 
-    // Interactive placeholder until the shell: echo console input.
-    proc::spawn("echo", || {
-        loop {
-            let byte = console::getchar_blocking();
-            print!("{}", byte as char);
-        }
+    // Init: wait for the demo workload to finish, verify the system state
+    // it should have left behind, then become the interactive shell.
+    proc::spawn("init", || {
+        timer::sleep_ticks(60);
+        assert!(STOP.load(Ordering::Relaxed), "monitor never ran");
+        let procs = proc::process_list();
+        assert!(
+            procs.iter().all(|&(_, name, _)| name == "init"),
+            "threads failed to exit and be reaped: {procs:?}"
+        );
+        println!();
+        println!("ALL BOOT TESTS PASSED");
+        shell::shell_main();
     });
 
     println!("  proc: entering scheduler");

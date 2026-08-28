@@ -9,6 +9,8 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 use core::arch::asm;
 use core::panic::PanicInfo;
 
@@ -17,6 +19,7 @@ core::arch::global_asm!(include_str!("kernelvec.S"));
 
 #[macro_use]
 mod console;
+mod heap;
 mod kalloc;
 mod memlayout;
 mod riscv;
@@ -125,6 +128,29 @@ extern "C" fn kmain() -> ! {
         assert!(pte & vm::PTE_W != 0, "uart must be writable");
         assert!(vm::translate(root, 0x4000_0000).is_none(), "hole must be unmapped");
         println!("  vm: translation self-test ok");
+    }
+
+    heap::init();
+    {
+        use alloc::{boxed::Box, string::String, vec::Vec};
+
+        let before = heap::free_bytes();
+        {
+            let boxed = Box::new(0xdead_beef_usize);
+            let mut v: Vec<usize> = (0..1000).collect();
+            v.retain(|x| x % 3 == 0);
+            let mut s = String::from("heap strings work: ");
+            s.push_str("yes");
+            assert_eq!(*boxed, 0xdead_beef);
+            assert_eq!(v.len(), 334);
+            assert_eq!(s.len(), 22);
+        }
+        // Everything dropped: the free list must coalesce back exactly.
+        assert_eq!(heap::free_bytes(), before, "heap leaked or lost bytes");
+        println!(
+            "  heap: {} KiB free, Box/Vec/String self-test ok",
+            heap::free_bytes() / 1024
+        );
     }
 
     timer::init();

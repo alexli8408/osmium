@@ -27,9 +27,11 @@ mod plic;
 mod proc;
 mod riscv;
 mod spinlock;
+mod syscall;
 mod timer;
 mod trap;
 mod uart;
+mod user;
 mod vm;
 
 use riscv::*;
@@ -209,6 +211,12 @@ extern "C" fn kmain() -> ! {
         assert!(b0 > 0 && b1 > 0, "a busy thread never ran");
         println!("  proc: preemptive multitasking verified (busy0={b0}, busy1={b1})");
     });
+
+    // User mode: the greeter must complete its syscalls and exit; the
+    // trespasser must be killed by the page-fault path without taking the
+    // kernel down with it.
+    proc::spawn_user("u-greeter", user::greeter_addr());
+    proc::spawn_user("u-trespasser", user::trespasser_addr());
 
     // Interactive placeholder until the shell: echo console input.
     proc::spawn("echo", || {

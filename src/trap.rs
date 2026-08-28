@@ -132,17 +132,26 @@ extern "C" fn kerneltrap(frame: &mut TrapFrame) {
                 frame.sepc += instruction_len(frame.sepc);
             }
             EXC_ECALL_USER => {
-                // Syscall dispatch lands with the process module.
-                panic!("ecall from U-mode before syscalls exist");
+                crate::syscall::dispatch(frame);
+            }
+            _ if from_user => {
+                // A faulting user process dies; the kernel does not.
+                println!(
+                    "trap: killing pid {}: {} at sepc={:#x} stval={:#x}",
+                    crate::proc::current_pid(),
+                    exception_name(code),
+                    frame.sepc,
+                    stval::read(),
+                );
+                crate::proc::exit();
             }
             _ => {
                 panic!(
-                    "unhandled exception: {} (scause={:#x}) sepc={:#x} stval={:#x} from {}-mode",
+                    "unhandled exception: {} (scause={:#x}) sepc={:#x} stval={:#x} from S-mode",
                     exception_name(code),
                     cause,
                     frame.sepc,
                     stval::read(),
-                    if from_user { "U" } else { "S" },
                 );
             }
         }

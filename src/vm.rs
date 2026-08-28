@@ -109,7 +109,6 @@ pub unsafe fn map_pages(root: usize, va: usize, pa: usize, size: usize, perm: us
 ///
 /// # Safety
 /// Same contract as [`map_pages`]; the range must already be fully mapped.
-#[allow(dead_code)] // used when user-mode processes arrive
 pub unsafe fn protect(root: usize, va: usize, size: usize, perm: usize) {
     assert!(va % PAGE_SIZE == 0 && size % PAGE_SIZE == 0);
     for off in (0..size).step_by(PAGE_SIZE) {

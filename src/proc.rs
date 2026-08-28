@@ -57,6 +57,12 @@ pub struct Process {
     pub state: State,
     context: Context,
     entry: fn(),
+    /// Top of the kernel stack; a user process's trap stack starts here.
+    kstack_top: usize,
+    /// U-mode entry point, when this process runs user code.
+    user_entry: usize,
+    /// Physical page backing the U-mode stack, returned to kalloc at reap.
+    user_stack: Option<usize>,
     /// Owns the stack allocation; freed when the zombie is reaped.
     _kstack: Box<[u8]>,
 }
@@ -107,6 +113,9 @@ pub fn spawn(name: &'static str, entry: fn()) -> usize {
         state: State::Runnable,
         context: Context::zeroed(),
         entry,
+        kstack_top: stack_top,
+        user_entry: 0,
+        user_stack: None,
         _kstack: kstack,
     });
     // Forged context: first swtch into this thread "returns" to
@@ -122,6 +131,75 @@ pub fn spawn(name: &'static str, entry: fn()) -> usize {
     }
     pop_off();
     pid
+}
+
+/// Create a process that runs the U-mode code at `entry_va` (which must
+/// lie in the U-mapped `.user` section). Returns its pid.
+pub fn spawn_user(name: &'static str, entry_va: usize) -> usize {
+    let pid = spawn(name, user_thread_body);
+    push_off();
+    let s = unsafe { sched_data() };
+    for slot in s.procs.iter_mut().flatten() {
+        if slot.pid == pid {
+            slot.user_entry = entry_va;
+        }
+    }
+    pop_off();
+    pid
+}
+
+/// Kernel-side body of a user process: build its U-mode stack, then drop
+/// privilege. Runs as an ordinary kernel thread until the sret.
+fn user_thread_body() {
+    let (entry, kstack_top) = {
+        push_off();
+        let s = unsafe { sched_data() };
+        let cur = s.current.expect("user_thread_body outside a thread");
+        let p = s.procs[cur].as_ref().unwrap();
+        let out = (p.user_entry, p.kstack_top);
+        pop_off();
+        out
+    };
+    assert!(entry != 0, "user process with no entry point");
+
+    // One page of user stack, granted the U bit in place.
+    let ustack = crate::kalloc::alloc().expect("no page for user stack");
+    unsafe {
+        crate::vm::protect(
+            crate::vm::kernel_root(),
+            ustack,
+            crate::memlayout::PAGE_SIZE,
+            crate::vm::PTE_R | crate::vm::PTE_W | crate::vm::PTE_U,
+        );
+    }
+    {
+        push_off();
+        let s = unsafe { sched_data() };
+        let cur = s.current.expect("user_thread_body outside a thread");
+        s.procs[cur].as_mut().unwrap().user_stack = Some(ustack);
+        pop_off();
+    }
+
+    unsafe { enter_user(entry, ustack + crate::memlayout::PAGE_SIZE, kstack_top) }
+}
+
+/// Drop to U-mode: the sret twin of the M->S handoff in start().
+///
+/// # Safety
+/// `entry` must be U-executable code and `user_sp` a U-writable stack.
+unsafe fn enter_user(entry: usize, user_sp: usize, kstack_top: usize) -> ! {
+    use crate::riscv::{sepc, sscratch, sstatus, SSTATUS_SPIE, SSTATUS_SPP};
+
+    // No interrupts between arming sscratch and the sret: a trap in that
+    // window would take the user path with a half-built state.
+    riscv::intr_off();
+    unsafe {
+        sscratch::write(kstack_top); // kernelvec: "currently in U-mode"
+        sepc::write(entry);
+        sstatus::clear(SSTATUS_SPP); // sret goes to U
+        sstatus::set(SSTATUS_SPIE); // ...with interrupts on
+        core::arch::asm!("mv sp, {0}", "sret", in(reg) user_sp, options(noreturn));
+    }
 }
 
 /// First code every thread runs, entered via the forged context's `ra`.
@@ -266,6 +344,19 @@ pub fn scheduler() -> ! {
         // stack, never on the stack being freed.
         for slot in sched.procs.iter_mut() {
             if matches!(slot.as_deref(), Some(p) if p.state == State::Zombie) {
+                if let Some(page) = slot.as_ref().unwrap().user_stack {
+                    unsafe {
+                        // Strip the U bit before the page returns to
+                        // kernel-only circulation.
+                        crate::vm::protect(
+                            crate::vm::kernel_root(),
+                            page,
+                            crate::memlayout::PAGE_SIZE,
+                            crate::vm::PTE_R | crate::vm::PTE_W,
+                        );
+                        crate::kalloc::free(page);
+                    }
+                }
                 *slot = None;
             }
         }

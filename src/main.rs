@@ -239,6 +239,8 @@ extern "C" fn kmain() -> ! {
     proc::spawn_user("u-greeter", user::greeter_addr());
     proc::spawn_user("u-trespasser", user::trespasser_addr());
     proc::spawn_user("u-badsys", user::badsys_addr());
+    // uname exercises the kernel->user copy path (SYS_UNAME + copy_to_user).
+    proc::spawn_user("u-uname", user::uname_addr());
 
     // Init: wait for the demo workload to finish, verify the system state
     // it should have left behind, then become the interactive shell.

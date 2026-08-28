@@ -123,10 +123,73 @@ user_prog_badsys:
 "#
 );
 
+global_asm!(
+    r#"
+.section .user, "ax", @progbits
+
+# --- uname: exercises the kernel->user copy path. Asks the kernel to fill a
+#     stack buffer via SYS_UNAME, then writes it back out via SYS_WRITE. ---
+.global user_prog_uname
+.align 4
+user_prog_uname:
+    addi    sp, sp, -32
+    mv      a0, sp                  # buffer on the user stack
+    li      a1, 32
+    li      a7, 7                   # SYS_UNAME -> bytes written in a0
+    ecall
+    # Echo exactly what the kernel wrote (a0 = length) back to the console.
+    mv      a1, a0
+    mv      a0, sp
+    li      a7, 1                   # SYS_WRITE
+    ecall
+    addi    sp, sp, 32
+    li      a0, 0
+    li      a7, 2                   # SYS_EXIT
+    ecall
+
+# --- echoline: read one line from the console (SYS_READ) and echo it back
+#     (SYS_WRITE). Demonstrates blocking user input end to end. ---
+.global user_prog_echoline
+.align 4
+user_prog_echoline:
+    la      a0, 10f
+    li      a1, 11f - 10f
+    li      a7, 1                   # SYS_WRITE (prompt)
+    ecall
+    addi    sp, sp, -128
+    mv      a0, sp
+    li      a1, 128
+    li      a7, 6                   # SYS_READ -> a0 = byte count
+    ecall
+    mv      a1, a0                  # echo exactly what was read
+    la      a0, 12f
+    # (write the label first)
+    li      a2, 13f - 12f
+    mv      s0, a1                  # save count
+    mv      a1, a2
+    li      a7, 1
+    ecall                           # SYS_WRITE "you typed: "
+    mv      a0, sp
+    mv      a1, s0
+    li      a7, 1
+    ecall                           # SYS_WRITE the line
+    addi    sp, sp, 128
+    li      a0, 0
+    li      a7, 2                   # SYS_EXIT
+    ecall
+10: .ascii  "echoline: type a line and press enter\n"
+11:
+12: .ascii  "you typed: "
+13:
+"#
+);
+
 unsafe extern "C" {
     fn user_prog_greeter();
     fn user_prog_trespasser();
     fn user_prog_badsys();
+    fn user_prog_uname();
+    fn user_prog_echoline();
 }
 
 pub fn greeter_addr() -> usize {
@@ -139,4 +202,12 @@ pub fn trespasser_addr() -> usize {
 
 pub fn badsys_addr() -> usize {
     user_prog_badsys as *const () as usize
+}
+
+pub fn uname_addr() -> usize {
+    user_prog_uname as *const () as usize
+}
+
+pub fn echoline_addr() -> usize {
+    user_prog_echoline as *const () as usize
 }

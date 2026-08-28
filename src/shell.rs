@@ -55,6 +55,8 @@ fn run_command(cmd: &str) {
             println!("  uptime    time since boot");
             println!("  greet     spawn the U-mode greeter program");
             println!("  fault     spawn the U-mode trespasser (it will be killed)");
+            println!("  echoline  run a U-mode program that reads a line and echoes it");
+            println!("  uname     print the kernel version (via a U-mode program)");
             println!("  poweroff  exit QEMU");
             println!("  reboot    reset the machine");
         }
@@ -94,6 +96,17 @@ fn run_command(cmd: &str) {
         "fault" => {
             let pid = proc::spawn_user("u-trespasser", user::trespasser_addr());
             println!("  spawned pid {pid}");
+        }
+        "echoline" => {
+            // Join the child so the shell stops reading input while the
+            // user program owns the console — otherwise both would race
+            // for the same keystrokes.
+            let pid = proc::spawn_user("u-echoline", user::echoline_addr());
+            proc::join(pid);
+        }
+        "uname" => {
+            let pid = proc::spawn_user("u-uname", user::uname_addr());
+            proc::join(pid);
         }
         "poweroff" => power::poweroff(),
         "reboot" => power::reboot(),

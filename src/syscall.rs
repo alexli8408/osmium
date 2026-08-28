@@ -17,9 +17,14 @@ const SYS_EXIT: usize = 2;
 const SYS_YIELD: usize = 3;
 const SYS_GETPID: usize = 4;
 const SYS_SLEEP_MS: usize = 5;
+const SYS_READ: usize = 6;
+const SYS_UNAME: usize = 7;
 
-/// Longest single write we accept from user space.
+/// Longest single transfer we accept across the user boundary.
 const WRITE_MAX: usize = 1024;
+
+/// Reported by SYS_UNAME.
+const UNAME: &[u8] = b"osmium 0.1.0 riscv64\n";
 
 const ERR: usize = usize::MAX; // -1
 
@@ -56,6 +61,33 @@ fn copy_from_user(ptr: usize, len: usize) -> Option<Vec<u8>> {
     Some(buf)
 }
 
+/// Copy `src` into user memory at `ptr`, first proving every touched page is
+/// mapped U **and writable** (write-direction mirror of copy_from_user).
+/// Returns the number of bytes written, or None if the range is rejected.
+fn copy_to_user(ptr: usize, src: &[u8]) -> Option<usize> {
+    let end = ptr.checked_add(src.len())?;
+    if end > vm::VA_MAX {
+        return None;
+    }
+
+    let root = vm::kernel_root();
+    let mut page = ptr & !(PAGE_SIZE - 1);
+    while page < end {
+        let (_, pte) = vm::translate(root, page)?;
+        if pte & PTE_U == 0 || pte & vm::PTE_W == 0 {
+            return None;
+        }
+        page += PAGE_SIZE;
+    }
+
+    with_sum(|| {
+        for (i, &byte) in src.iter().enumerate() {
+            unsafe { ((ptr + i) as *mut u8).write_volatile(byte) };
+        }
+    });
+    Some(src.len())
+}
+
 /// Handle an ecall from U-mode. The frame's a0 gets the return value, and
 /// sepc advances past the (always 4-byte) ecall instruction.
 pub fn dispatch(frame: &mut TrapFrame) {
@@ -76,6 +108,8 @@ pub fn dispatch(frame: &mut TrapFrame) {
             0
         }
         SYS_GETPID => proc::current_pid(),
+        SYS_READ => sys_read(frame.a0, frame.a1),
+        SYS_UNAME => sys_uname(frame.a0, frame.a1),
         SYS_SLEEP_MS => {
             // Saturate: a0 is user-controlled, so a plain multiply would
             // overflow-panic the kernel on a huge value in debug builds.
@@ -111,5 +145,38 @@ fn sys_write(ptr: usize, len: usize) -> usize {
             len
         }
         Err(_) => ERR,
+    }
+}
+
+/// Blocking console read into a user buffer. Waits (sleeping, not spinning)
+/// for at least one byte, then drains whatever is already buffered, up to
+/// `len`. Returns the byte count, or ERR if the buffer is rejected.
+fn sys_read(ptr: usize, len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let cap = len.min(WRITE_MAX);
+
+    let mut buf = Vec::with_capacity(cap);
+    buf.push(crate::console::getchar_blocking());
+    while buf.len() < cap {
+        match crate::console::getchar() {
+            Some(byte) => buf.push(byte),
+            None => break,
+        }
+    }
+
+    match copy_to_user(ptr, &buf) {
+        Some(n) => n,
+        None => ERR,
+    }
+}
+
+/// Copy the kernel version string into a user buffer; returns its length.
+fn sys_uname(ptr: usize, len: usize) -> usize {
+    let n = UNAME.len().min(len);
+    match copy_to_user(ptr, &UNAME[..n]) {
+        Some(written) => written,
+        None => ERR,
     }
 }

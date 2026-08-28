@@ -296,6 +296,9 @@ pub fn wakeup(chan: usize) {
     pop_off();
 }
 
+/// Wait channel woken whenever any process exits, so `join` can recheck.
+const EXIT_CHAN: usize = 0xdead_0001;
+
 /// Terminate the calling thread. Its stack is freed later by the
 /// scheduler (which by then runs on its own stack).
 pub fn exit() -> ! {
@@ -305,8 +308,33 @@ pub fn exit() -> ! {
         let cur = sched.current.expect("exit outside a thread");
         sched.procs[cur].as_mut().unwrap().state = State::Zombie;
     }
+    // Wake joiners before yielding for the last time (net push_off depth
+    // stays 1, which is sched()'s precondition).
+    wakeup(EXIT_CHAN);
     sched();
     unreachable!("zombie thread rescheduled");
+}
+
+/// Block until process `pid` has finished (become a zombie or been reaped).
+/// Returns immediately if no such pid exists.
+pub fn join(pid: usize) {
+    loop {
+        push_off();
+        let s = unsafe { sched_data() };
+        let still_running = s
+            .procs
+            .iter()
+            .flatten()
+            .any(|p| p.pid == pid && p.state != State::Zombie);
+        if !still_running {
+            pop_off();
+            return;
+        }
+        // Atomic under push_off: the exit that would wake us can't slip
+        // between the check above and this sleep.
+        sleep(EXIT_CHAN);
+        pop_off();
+    }
 }
 
 /// The pid of the calling thread (0 for the scheduler/boot context).

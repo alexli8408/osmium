@@ -45,14 +45,16 @@ processes in user mode behind hardware memory protection.
   mapping anything; the page-fault handler is *constructive*, mapping a
   page on first touch and resuming the process. Faults outside the heap
   (e.g. a stray kernel-memory access) stay fatal.
-- **`fork()` / `wait()`** — a process duplicates itself: its whole address
-  space is cloned, the child returns 0 while the parent gets the child's
-  pid, and the child resumes at the exact fork-return point via a full
-  register-frame restore. `wait` blocks on the child.
+- **`fork()` / `exec()` / `wait()`** — the Unix process model. `fork`
+  clones a process's whole address space (child returns 0, parent gets the
+  pid), the child resuming at the exact fork-return point via a full
+  register-frame restore; `exec` replaces a process's image with a named
+  program in a fresh address space; `wait` blocks on a child. A user
+  program demonstrates the canonical fork-then-exec-in-the-child pattern.
 - **User mode** — processes drop to U-privilege with `sret`, call back into
   the kernel through `ecall` syscalls (`write`, `read`, `exit`, `yield`,
   `getpid`, `sleep_ms`, `uname`, `open`, `fread`, `close`, `sbrk`, `fork`,
-  `wait`), and get
+  `wait`, `exec`), and get
   **killed on faults instead of taking the kernel down**. Both copy
   directions are validated against the calling process's address space:
   `copy_from_user`/`copy_to_user` reject wrapping or out-of-range pointers

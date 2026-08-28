@@ -6,7 +6,8 @@ set -u
 QEMU="$1"
 QEMU_FLAGS="$2"
 KERNEL="$3"
-LOG="$(mktemp -t osmium-boot)"
+# Portable across GNU (Linux/CI) and BSD (macOS) mktemp.
+LOG="$(mktemp "${TMPDIR:-/tmp}/osmium-boot.XXXXXX")"
 TIMEOUT_SECS=30
 MARKER="ALL BOOT TESTS PASSED"
 

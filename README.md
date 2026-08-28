@@ -41,9 +41,13 @@ processes in user mode behind hardware memory protection.
   fixed virtual address; the kernel map is shared into every table so
   traps run without swapping first, and each process's pages are freed on
   exit. All demo programs run at the same VA in isolated spaces.
+- **Demand-paged user heap** — `sbrk` extends the heap region without
+  mapping anything; the page-fault handler is *constructive*, mapping a
+  page on first touch and resuming the process. Faults outside the heap
+  (e.g. a stray kernel-memory access) stay fatal.
 - **User mode** — processes drop to U-privilege with `sret`, call back into
   the kernel through `ecall` syscalls (`write`, `read`, `exit`, `yield`,
-  `getpid`, `sleep_ms`, `uname`, `open`, `fread`, `close`), and get
+  `getpid`, `sleep_ms`, `uname`, `open`, `fread`, `close`, `sbrk`), and get
   **killed on faults instead of taking the kernel down**. Both copy
   directions are validated against the calling process's address space:
   `copy_from_user`/`copy_to_user` reject wrapping or out-of-range pointers

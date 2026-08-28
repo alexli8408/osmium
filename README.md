@@ -33,12 +33,22 @@ processes in user mode behind hardware memory protection.
   scheduling**, xv6-style `sleep`/`wakeup` channels with lost-wakeup-proof
   check-then-sleep
 - **User mode** — processes drop to U-privilege with `sret`, call back into
-  the kernel through `ecall` syscalls (`write`, `exit`, `yield`, `getpid`,
-  `sleep_ms`), and get **killed on faults instead of taking the kernel
-  down**; `sys_write` validates every user pointer against the page table's
-  U bit before copying under `sstatus.SUM`
-- **Interactive shell** on the serial console (`ps`, `mem`, `uptime`,
-  spawn-a-user-program, `poweroff`)
+  the kernel through `ecall` syscalls (`write`, `read`, `exit`, `yield`,
+  `getpid`, `sleep_ms`, `uname`, `open`, `fread`, `close`), and get
+  **killed on faults instead of taking the kernel down**. Both copy
+  directions are validated: `copy_from_user`/`copy_to_user` reject
+  wrapping or out-of-range pointers and prove every touched page carries
+  the U bit (and, for writes, is writable) before touching it under
+  `sstatus.SUM` — a syscall can't be tricked into reading or writing
+  kernel memory
+- **Process control** — `join(pid)` blocks until a process finishes, so
+  the shell can hand the console to a user program and take it back
+- **In-memory filesystem** — a flat read-only ramfs (`fs.rs`) with an
+  offset-based read path, per-process file-descriptor tables, and the
+  `open`/`fread`/`close` syscalls on top
+- **Interactive shell** on the serial console — `ps`, `mem`, `uptime`,
+  `ls`, `cat FILE`, run-a-user-program (`greet`/`fault`/`echoline`/
+  `uname`), `poweroff`/`reboot`
 - **Boot self-tests** for every subsystem, checked in CI by booting the
   kernel headless in QEMU
 
@@ -46,29 +56,38 @@ processes in user mode behind hardware memory protection.
 
 ```
 osmium kernel booting on hart 0
-  kernel image: 0x80000000..0x80028000 (160 KiB)
+  kernel image: 0x80000000..0x8002c000 (176 KiB)
   traps: stvec -> kernelvec
-trap: breakpoint at 0x800084dc (S-mode)
   traps: survived an ebreak round-trip
-  kalloc: 30680 free pages (119 MiB)
+  kalloc: 30676 free pages (119 MiB)
   kalloc: alloc/free self-test ok
   vm: sv39 paging on (root table 0x87ffe000)
   vm: translation self-test ok
   heap: 8192 KiB free, Box/Vec/String self-test ok
+  fs: ramfs mounted, 3 files
   plic: routing uart irq 10 to hart 0
-  timer: 100 Hz ticks running, uptime 169 ms
+  timer: 100 Hz ticks running, uptime 179 ms
   proc: entering scheduler
   thread ping (pid 1): round 0
-  thread pong (pid 2): round 0
 user: trespasser about to touch kernel memory...
-trap: killing pid 7: load page fault at sepc=0x8000f096 stval=0x80000000
+trap: killing pid 7: load page fault at sepc=0x80013096 stval=0x80000000
+trap: breakpoint at 0x800130e0 (U-mode)
+osmium 0.1.0 riscv64
+welcome to osmium -- a RISC-V kernel in Rust
+user: badsys survived; kernel rejected hostile args
 user: hello from U-mode via ecall! my pid is 6
 syscall: pid 6 exited with code 0
-  proc: preemptive multitasking verified (busy0=995212, busy1=1051582)
+  proc: preemptive multitasking verified (busy0=1136497, busy1=1235739)
 
 ALL BOOT TESTS PASSED
 
 osmium shell -- 'help' lists commands
+osmium> ls
+      45  motd
+      97  readme
+      40  cpuinfo
+osmium> cat motd
+welcome to osmium -- a RISC-V kernel in Rust
 osmium> ps
   PID   NAME         STATE
   8     init         Running
@@ -147,8 +166,9 @@ pages granted the U bit in place and stripped of it on reap.
 | `src/heap.rs`        | `GlobalAlloc` free-list heap                         |
 | `src/plic.rs`        | PLIC claim/complete driver                           |
 | `src/switch.S`       | `swtch`: callee-saved context switch                 |
-| `src/proc.rs`        | threads, scheduler, sleep/wakeup, user-mode entry    |
+| `src/proc.rs`        | threads, scheduler, sleep/wakeup, join, fd tables    |
 | `src/syscall.rs`     | ecall dispatch + user-pointer validation             |
+| `src/fs.rs`          | flat read-only in-memory filesystem                  |
 | `src/user.rs`        | embedded U-mode assembly programs                    |
 | `src/shell.rs`       | interactive console shell                            |
 | `src/power.rs`       | sifive_test poweroff/reboot                          |

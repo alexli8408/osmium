@@ -67,12 +67,66 @@ user_prog_trespasser:
     ecall
 4:  .ascii  "user: trespasser about to touch kernel memory...\n"
 5:
+
+# --- badsys: feeds hostile arguments to syscalls; the kernel must reject
+#     them (return -1) and stay alive, so this program runs to a clean exit ---
+.global user_prog_badsys
+.align 4
+user_prog_badsys:
+    # A U-mode breakpoint: the kernel must report it, step past it, and
+    # resume us here. If it instead faulted reading our instruction (SUM
+    # bug) the kernel would panic and nothing below would run.
+    ebreak
+
+    # SYS_WRITE with a pointer past the Sv39 user range (1<<38). A kernel
+    # that doesn't bounds-check would panic in the page-table walk.
+    li      a0, 0x4000000000
+    li      a1, 8
+    li      a7, 1                   # SYS_WRITE
+    ecall
+    addi    a0, a0, 1               # want -1 (0xffff...ffff); a0+1 == 0 if so
+    bnez    a0, 1f                  # nonzero -> not rejected -> fail
+
+    # SYS_WRITE with a pointer that wraps (ptr + len overflows usize).
+    li      a0, -8
+    li      a1, 64
+    li      a7, 1
+    ecall
+    addi    a0, a0, 1
+    bnez    a0, 1f
+
+    # SYS_SLEEP_MS with a huge value: must saturate, not overflow-panic.
+    # (Uses a modest value so the demo doesn't actually stall for ages.)
+    li      a0, 5
+    li      a7, 5                   # SYS_SLEEP_MS
+    ecall
+
+    la      a0, 6f
+    li      a1, 7f - 6f
+    li      a7, 1
+    ecall
+    li      a0, 0
+    li      a7, 2                   # SYS_EXIT (success)
+    ecall
+1:
+    la      a0, 8f
+    li      a1, 9f - 8f
+    li      a7, 1
+    ecall
+    li      a0, 1
+    li      a7, 2                   # SYS_EXIT (failure)
+    ecall
+6:  .ascii  "user: badsys survived; kernel rejected hostile args\n"
+7:
+8:  .ascii  "user: badsys FAILED -- kernel did not reject an arg\n"
+9:
 "#
 );
 
 unsafe extern "C" {
     fn user_prog_greeter();
     fn user_prog_trespasser();
+    fn user_prog_badsys();
 }
 
 pub fn greeter_addr() -> usize {
@@ -81,4 +135,8 @@ pub fn greeter_addr() -> usize {
 
 pub fn trespasser_addr() -> usize {
     user_prog_trespasser as *const () as usize
+}
+
+pub fn badsys_addr() -> usize {
+    user_prog_badsys as *const () as usize
 }

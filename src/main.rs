@@ -233,9 +233,12 @@ extern "C" fn kmain() -> ! {
 
     // User mode: the greeter must complete its syscalls and exit; the
     // trespasser must be killed by the page-fault path without taking the
-    // kernel down with it.
+    // kernel down with it; badsys feeds hostile syscall arguments (out-of-
+    // range and wrapping pointers, an overflowing sleep) that the kernel
+    // must reject rather than panic on, so it too exits cleanly.
     proc::spawn_user("u-greeter", user::greeter_addr());
     proc::spawn_user("u-trespasser", user::trespasser_addr());
+    proc::spawn_user("u-badsys", user::badsys_addr());
 
     // Init: wait for the demo workload to finish, verify the system state
     // it should have left behind, then become the interactive shell.

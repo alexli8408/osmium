@@ -129,7 +129,15 @@ extern "C" fn kerneltrap(frame: &mut TrapFrame) {
                     frame.sepc,
                     if from_user { "U" } else { "S" }
                 );
-                frame.sepc += instruction_len(frame.sepc);
+                // sepc points into a U page when the breakpoint came from
+                // user mode; reading it from S-mode needs SUM, or the load
+                // itself faults and panics the kernel.
+                let len = if from_user {
+                    with_sum(|| instruction_len(frame.sepc))
+                } else {
+                    instruction_len(frame.sepc)
+                };
+                frame.sepc += len;
             }
             EXC_ECALL_USER => {
                 crate::syscall::dispatch(frame);

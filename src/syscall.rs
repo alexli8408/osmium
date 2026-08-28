@@ -28,9 +28,18 @@ const ERR: usize = usize::MAX; // -1
 /// bare pointer dereference would let user code read kernel memory through
 /// the write syscall.
 fn copy_from_user(ptr: usize, len: usize) -> Option<Vec<u8>> {
+    // Reject a range that wraps the address space or leaves the Sv39 user
+    // region *before* any of it reaches vm::walk (whose `va < VA_MAX`
+    // assert would otherwise let a hostile pointer panic the kernel). A
+    // rejected range returns None, which the caller turns into an error.
+    let end = ptr.checked_add(len)?;
+    if end > vm::VA_MAX {
+        return None;
+    }
+
     let root = vm::kernel_root();
     let mut page = ptr & !(PAGE_SIZE - 1);
-    while page < ptr + len {
+    while page < end {
         let (_, pte) = vm::translate(root, page)?;
         if pte & PTE_U == 0 {
             return None;
@@ -68,7 +77,13 @@ pub fn dispatch(frame: &mut TrapFrame) {
         }
         SYS_GETPID => proc::current_pid(),
         SYS_SLEEP_MS => {
-            let ticks = (frame.a0 * timer::TICK_HZ).div_ceil(1000).max(1);
+            // Saturate: a0 is user-controlled, so a plain multiply would
+            // overflow-panic the kernel on a huge value in debug builds.
+            let ticks = frame
+                .a0
+                .saturating_mul(timer::TICK_HZ)
+                .div_ceil(1000)
+                .max(1);
             timer::sleep_ticks(ticks);
             0
         }

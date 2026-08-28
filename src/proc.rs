@@ -107,8 +107,10 @@ unsafe fn sched_data() -> &'static mut Scheduler {
     unsafe { &mut *SCHED.0.get() }
 }
 
-/// Create a kernel thread that starts at `entry`; returns its pid.
-pub fn spawn(name: &'static str, entry: fn()) -> usize {
+/// Build a process and publish it to the scheduler as Runnable. `user_entry`
+/// is baked in *before* the process becomes visible, so a preemption right
+/// after publication can never observe a half-initialized user thread.
+fn spawn_inner(name: &'static str, entry: fn(), user_entry: usize) -> usize {
     let kstack = vec![0u8; KSTACK_SIZE].into_boxed_slice();
     // Stack grows down from the top, 16-byte aligned per the ABI.
     let stack_top = (kstack.as_ptr() as usize + KSTACK_SIZE) & !0xf;
@@ -121,7 +123,7 @@ pub fn spawn(name: &'static str, entry: fn()) -> usize {
         context: Context::zeroed(),
         entry,
         kstack_top: stack_top,
-        user_entry: 0,
+        user_entry,
         user_stack: None,
         _kstack: kstack,
     });
@@ -140,19 +142,15 @@ pub fn spawn(name: &'static str, entry: fn()) -> usize {
     pid
 }
 
+/// Create a kernel thread that starts at `entry`; returns its pid.
+pub fn spawn(name: &'static str, entry: fn()) -> usize {
+    spawn_inner(name, entry, 0)
+}
+
 /// Create a process that runs the U-mode code at `entry_va` (which must
 /// lie in the U-mapped `.user` section). Returns its pid.
 pub fn spawn_user(name: &'static str, entry_va: usize) -> usize {
-    let pid = spawn(name, user_thread_body);
-    push_off();
-    let s = unsafe { sched_data() };
-    for slot in s.procs.iter_mut().flatten() {
-        if slot.pid == pid {
-            slot.user_entry = entry_va;
-        }
-    }
-    pop_off();
-    pid
+    spawn_inner(name, user_thread_body, entry_va)
 }
 
 /// Kernel-side body of a user process: build its U-mode stack, then drop

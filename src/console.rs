@@ -1,6 +1,6 @@
 //! Kernel console: `print!`/`println!` over the UART, behind a spinlock so
 //! concurrent printers (kernel threads, interrupt handlers) don't interleave
-//! mid-line.
+//! mid-line — plus the interrupt-fed input buffer readers pull from.
 
 use core::fmt::{self, Write};
 
@@ -34,6 +34,51 @@ pub fn _print(args: fmt::Arguments) {
 #[doc(hidden)]
 pub fn _print_emergency(args: fmt::Arguments) {
     let _ = Console.write_fmt(args);
+}
+
+const INPUT_CAP: usize = 256;
+
+/// Ring buffer between the UART RX interrupt (producer) and console
+/// readers (consumers). Indices grow without bound; the distance `w - r`
+/// is the fill level, and `% INPUT_CAP` picks the slot.
+struct Input {
+    buf: [u8; INPUT_CAP],
+    r: usize,
+    w: usize,
+}
+
+static INPUT: SpinLock<Input> = SpinLock::new(
+    "input",
+    Input {
+        buf: [0; INPUT_CAP],
+        r: 0,
+        w: 0,
+    },
+);
+
+/// Called from the UART interrupt for each received byte. Stores raw bytes
+/// (terminal CR normalized to NL); echo and line editing are the reader's
+/// job. Bytes arriving into a full buffer are dropped.
+pub fn on_input(byte: u8) {
+    let byte = if byte == b'\r' { b'\n' } else { byte };
+    let mut input = INPUT.lock();
+    if input.w - input.r < INPUT_CAP {
+        let slot = input.w % INPUT_CAP;
+        input.buf[slot] = byte;
+        input.w += 1;
+    }
+}
+
+/// Pop one byte of console input, or None when the buffer is empty.
+pub fn getchar() -> Option<u8> {
+    let mut input = INPUT.lock();
+    if input.r == input.w {
+        None
+    } else {
+        let byte = input.buf[input.r % INPUT_CAP];
+        input.r += 1;
+        Some(byte)
+    }
 }
 
 #[macro_export]

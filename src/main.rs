@@ -22,6 +22,7 @@ mod console;
 mod heap;
 mod kalloc;
 mod memlayout;
+mod plic;
 mod riscv;
 mod spinlock;
 mod timer;
@@ -153,6 +154,11 @@ extern "C" fn kmain() -> ! {
         );
     }
 
+    plic::init();
+    plic::init_hart();
+    uart::enable_rx_interrupt();
+    println!("  plic: routing uart irq {} to hart 0", memlayout::UART0_IRQ);
+
     timer::init();
     intr_on();
     let start_ticks = timer::ticks();
@@ -165,8 +171,13 @@ extern "C" fn kmain() -> ! {
         timer::uptime_ms()
     );
 
+    // Temporary idle loop until the scheduler exists: echo console input
+    // to prove the PLIC -> UART -> ring buffer path end to end.
     loop {
         wfi();
+        while let Some(byte) = console::getchar() {
+            print!("{}", byte as char);
+        }
     }
 }
 

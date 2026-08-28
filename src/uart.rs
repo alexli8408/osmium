@@ -48,7 +48,6 @@ pub fn init() {
 
 /// Enable the receive-data interrupt. Called once the PLIC is routing UART
 /// IRQs; before that the bit would just be ignored.
-#[allow(dead_code)] // wired up when the PLIC lands
 pub fn enable_rx_interrupt() {
     reg_write(IER, IER_RX_ENABLE);
 }
@@ -60,11 +59,17 @@ pub fn put(byte: u8) {
 }
 
 /// Non-blocking receive: `None` when the RX FIFO is empty.
-#[allow(dead_code)] // used by the console input path once the PLIC lands
 pub fn get() -> Option<u8> {
     if reg_read(LSR) & LSR_RX_READY != 0 {
         Some(reg_read(RBR))
     } else {
         None
+    }
+}
+
+/// PLIC interrupt handler: drain the RX FIFO into the console buffer.
+pub fn handle_interrupt() {
+    while let Some(byte) = get() {
+        crate::console::on_input(byte);
     }
 }

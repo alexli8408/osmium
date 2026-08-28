@@ -105,7 +105,13 @@ extern "C" fn kerneltrap(frame: &mut TrapFrame) {
                 crate::timer::on_tick();
             }
             IRQ_S_EXTERNAL => {
-                println!("trap: unexpected external interrupt");
+                if let Some(irq) = crate::plic::claim() {
+                    match irq {
+                        crate::memlayout::UART0_IRQ => crate::uart::handle_interrupt(),
+                        _ => println!("trap: unexpected external irq {irq}"),
+                    }
+                    crate::plic::complete(irq);
+                }
             }
             _ => {
                 panic!("unexpected interrupt, scause={:#x}", cause);

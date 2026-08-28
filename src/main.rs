@@ -13,12 +13,14 @@ use core::arch::asm;
 use core::panic::PanicInfo;
 
 core::arch::global_asm!(include_str!("entry.S"));
+core::arch::global_asm!(include_str!("kernelvec.S"));
 
 #[macro_use]
 mod console;
 mod memlayout;
 mod riscv;
 mod spinlock;
+mod trap;
 mod uart;
 
 use riscv::*;
@@ -73,6 +75,14 @@ extern "C" fn kmain() -> ! {
         memlayout::kernel_end(),
         (memlayout::kernel_end() - memlayout::kernel_start()) / 1024
     );
+
+    trap::init();
+    println!("  traps: stvec -> kernelvec");
+
+    // Prove the whole save/dispatch/restore path works: take a synchronous
+    // breakpoint exception and come back from it.
+    unsafe { asm!("ebreak") };
+    println!("  traps: survived an ebreak round-trip");
 
     loop {
         wfi();

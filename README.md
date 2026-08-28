@@ -45,9 +45,14 @@ processes in user mode behind hardware memory protection.
   mapping anything; the page-fault handler is *constructive*, mapping a
   page on first touch and resuming the process. Faults outside the heap
   (e.g. a stray kernel-memory access) stay fatal.
+- **`fork()` / `wait()`** — a process duplicates itself: its whole address
+  space is cloned, the child returns 0 while the parent gets the child's
+  pid, and the child resumes at the exact fork-return point via a full
+  register-frame restore. `wait` blocks on the child.
 - **User mode** — processes drop to U-privilege with `sret`, call back into
   the kernel through `ecall` syscalls (`write`, `read`, `exit`, `yield`,
-  `getpid`, `sleep_ms`, `uname`, `open`, `fread`, `close`, `sbrk`), and get
+  `getpid`, `sleep_ms`, `uname`, `open`, `fread`, `close`, `sbrk`, `fork`,
+  `wait`), and get
   **killed on faults instead of taking the kernel down**. Both copy
   directions are validated against the calling process's address space:
   `copy_from_user`/`copy_to_user` reject wrapping or out-of-range pointers
@@ -183,7 +188,8 @@ when the process is reaped.
 | `src/sync.rs`        | counting semaphore, bounded blocking channel         |
 | `src/plic.rs`        | PLIC claim/complete driver                           |
 | `src/switch.S`       | `swtch`: callee-saved context switch                 |
-| `src/proc.rs`        | threads, scheduler, sleep/wakeup, join, fd tables    |
+| `src/userret.S`      | restore a full trap frame and sret (forked children) |
+| `src/proc.rs`        | threads, scheduler, sleep/wakeup, join, fork, fds    |
 | `src/syscall.rs`     | ecall dispatch + user-pointer validation             |
 | `src/fs.rs`          | flat read-only in-memory filesystem                  |
 | `src/user.rs`        | embedded U-mode assembly programs                    |

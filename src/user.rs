@@ -398,6 +398,81 @@ user_prog_forkexec_end:
 "#
 );
 
+global_asm!(
+    r#"
+.section .user, "ax", @progbits
+
+# --- ush: a userland shell. Reads a program name and runs it with the
+#     fork/exec/wait pattern, all in user mode via syscalls. Type a program
+#     name (greeter, uname, heapgrow, forker, catfile) to run it, or 'q' to
+#     quit. The line buffer lives on the stack, which is the only writable
+#     user memory SYS_READ is allowed to fill (the code pages are R-X).
+#     s0 = line length, s1 = buffer; the kernel preserves both across the
+#     syscalls, and fork copies them into the child. ---
+.global user_prog_ush
+.align 4
+user_prog_ush:
+    addi    sp, sp, -64
+    mv      s1, sp                  # s1 = line buffer (stack, RW+U)
+0:
+    la      a0, 8f
+    li      a1, 9f - 8f
+    li      a7, 1                   # SYS_WRITE prompt "osh$ "
+    ecall
+    mv      a0, s1
+    li      a1, 64
+    li      a7, 6                   # SYS_READ -> a0 = byte count
+    ecall
+    mv      s0, a0
+    blez    s0, 0b                  # empty read -> reprompt
+
+    # Strip a trailing newline from the length.
+    addi    t1, s0, -1
+    add     t2, s1, t1
+    lb      t3, 0(t2)
+    li      t4, 10
+    bne     t3, t4, 1f
+    mv      s0, t1
+1:
+    beqz    s0, 0b                  # blank line -> reprompt
+
+    # Builtin: 'q' quits the shell.
+    li      t0, 1
+    bne     s0, t0, 2f
+    lb      t0, 0(s1)
+    li      t1, 0x71                # 'q'
+    bne     t0, t1, 2f
+    li      a0, 0
+    li      a7, 2                   # SYS_EXIT
+    ecall
+2:
+    li      a7, 12                  # SYS_FORK
+    ecall
+    beqz    a0, 3f                  # child
+    li      a7, 13                  # SYS_WAIT (parent)
+    ecall
+    j       0b
+3:
+    mv      a0, s1                  # child: exec the typed program
+    mv      a1, s0
+    li      a7, 14                  # SYS_EXEC
+    ecall
+    la      a0, 10f
+    li      a1, 11f - 10f
+    li      a7, 1                   # SYS_WRITE "osh: unknown command\n"
+    ecall
+    li      a0, 1
+    li      a7, 2                   # SYS_EXIT (child)
+    ecall
+8:  .ascii  "osh$ "
+9:
+10: .ascii  "osh: unknown command (try greeter/uname/heapgrow/forker or q)\n"
+11:
+.global user_prog_ush_end
+user_prog_ush_end:
+"#
+);
+
 unsafe extern "C" {
     fn user_prog_greeter();
     fn user_prog_greeter_end();
@@ -417,6 +492,8 @@ unsafe extern "C" {
     fn user_prog_forker_end();
     fn user_prog_forkexec();
     fn user_prog_forkexec_end();
+    fn user_prog_ush();
+    fn user_prog_ush_end();
 }
 
 /// (link address, byte length) of a program's image in the kernel, which the
@@ -463,6 +540,10 @@ pub fn forker() -> Prog {
 
 pub fn forkexec() -> Prog {
     image(user_prog_forkexec, user_prog_forkexec_end)
+}
+
+pub fn ush() -> Prog {
+    image(user_prog_ush, user_prog_ush_end)
 }
 
 /// Resolve a program name to its image, for the exec syscall.

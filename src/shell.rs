@@ -67,6 +67,7 @@ fn run_command(line: &str) {
             println!("  uname     print the kernel version (via a U-mode program)");
             println!("  heapgrow  U-mode sbrk + demand-paging demo");
             println!("  fork      U-mode fork/wait demo");
+            println!("  ush       enter the userland shell (fork/exec/wait; 'q' to leave)");
             println!("  poweroff  exit QEMU");
             println!("  reboot    reset the machine");
         }
@@ -130,6 +131,12 @@ fn run_command(line: &str) {
         }
         "fork" => {
             let pid = proc::spawn_user("u-forker", user::forker());
+            proc::join(pid);
+        }
+        "ush" => {
+            // The userland shell owns the console until the user quits it
+            // with 'q'; join so the kernel shell doesn't race it for input.
+            let pid = proc::spawn_user("u-ush", user::ush());
             proc::join(pid);
         }
         "poweroff" => power::poweroff(),

@@ -30,20 +30,29 @@ user_prog_greeter:
     addi    s0, s0, -1
     bnez    s0, 1b
 
-    li      a7, 4                   # SYS_GETPID
+    li      a7, 4                   # SYS_GETPID -> a0 = pid
     ecall
-    # pid is a single digit for this demo; turn it into ASCII in-place on
-    # the stack and write it.
-    addi    sp, sp, -16
-    addi    a0, a0, 48
-    sb      a0, 0(sp)
-    li      a0, 10                  # '\n'
-    sb      a0, 1(sp)
-    mv      a0, sp
-    li      a1, 2
+    # Print the pid as decimal: build digits back-to-front on the stack.
+    addi    sp, sp, -32
+    addi    t1, sp, 32              # t1 = one past the buffer
+    li      t2, 10
+    mv      t0, a0                  # t0 = value
+    addi    t1, t1, -1
+    li      t3, 10
+    sb      t3, 0(t1)               # trailing newline
+30:
+    remu    t4, t0, t2              # t4 = value % 10
+    divu    t0, t0, t2              # value /= 10
+    addi    t4, t4, 48              # to ASCII
+    addi    t1, t1, -1
+    sb      t4, 0(t1)
+    bnez    t0, 30b
+    mv      a0, t1                  # first digit
+    addi    t5, sp, 32
+    sub     a1, t5, t1             # length
     li      a7, 1                   # SYS_WRITE
     ecall
-    addi    sp, sp, 16
+    addi    sp, sp, 32
 
     li      a0, 0
     li      a7, 2                   # SYS_EXIT

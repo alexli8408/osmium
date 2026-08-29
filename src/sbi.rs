@@ -11,8 +11,6 @@
 //! Only the extensions the kernel actually needs are wrapped: Base
 //! (discovery/probing), TIME (timer), and SRST (system reset).
 
-#![allow(dead_code)] // fully wired once the kernel boots on OpenSBI
-
 use core::arch::asm;
 
 /// Result of every SBI call: a standard error code and a call-specific value.
@@ -129,6 +127,7 @@ pub fn set_timer(when: usize) {
 
 pub const RESET_TYPE_SHUTDOWN: usize = 0;
 pub const RESET_TYPE_COLD_REBOOT: usize = 1;
+#[allow(dead_code)] // part of the SRST ABI; the kernel only cold-reboots
 pub const RESET_TYPE_WARM_REBOOT: usize = 2;
 pub const RESET_REASON_NONE: usize = 0;
 

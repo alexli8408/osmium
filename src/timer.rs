@@ -1,14 +1,16 @@
-//! Timer interrupts via the Sstc extension.
+//! Timer interrupts via the SBI TIME extension.
 //!
-//! QEMU virt's timebase runs at 10 MHz. With Sstc enabled (menvcfg.STCE,
-//! done in M-mode at boot), S-mode owns its timer: writing stimecmp arms a
-//! supervisor timer interrupt for when `time >= stimecmp` — no M-mode
-//! trampoline, no CLINT MMIO.
+//! QEMU virt's timebase runs at 10 MHz. The timer compare register lives
+//! behind machine mode, which belongs to OpenSBI — so the kernel reads the
+//! clock directly (rdtime is an unprivileged CSR the firmware exposes) and
+//! asks the firmware to arm each interrupt with sbi_set_timer. Arming also
+//! acknowledges the pending supervisor timer interrupt, which is why
+//! on_tick needs no separate clear.
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::riscv::{self, stimecmp};
-use crate::{proc, spinlock};
+use crate::riscv;
+use crate::{proc, sbi, spinlock};
 
 /// Wait channel signaled by every timer tick (arbitrary unique token).
 pub const TICK_CHAN: usize = 0x711c_c4a7;
@@ -24,14 +26,15 @@ static TICKS: AtomicUsize = AtomicUsize::new(0);
 /// Arm the first tick. Interrupts need not be enabled yet; the interrupt
 /// pends until sstatus.SIE goes high.
 pub fn init() {
-    unsafe { stimecmp::write(riscv::r_time() + TICK_INTERVAL) };
+    assert!(sbi::probe_time(), "firmware lacks the SBI TIME extension");
+    sbi::set_timer(riscv::r_time() + TICK_INTERVAL);
 }
 
-/// Called from the trap handler on every S-timer interrupt. Re-arming
-/// stimecmp is what clears the pending interrupt.
+/// Called from the trap handler on every S-timer interrupt. Re-arming via
+/// the firmware is what clears the pending interrupt.
 pub fn on_tick() {
     TICKS.fetch_add(1, Ordering::Relaxed);
-    unsafe { stimecmp::write(riscv::r_time() + TICK_INTERVAL) };
+    sbi::set_timer(riscv::r_time() + TICK_INTERVAL);
 }
 
 /// Ticks since boot (one every 1/TICK_HZ seconds).

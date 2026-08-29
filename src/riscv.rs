@@ -53,8 +53,6 @@ csr!(stval, "stval");
 csr!(satp, "satp");
 csr!(sscratch, "sscratch");
 csr!(scounteren, "scounteren");
-// stimecmp is part of the Sstc extension; use its number.
-csr!(stimecmp, "0x14d");
 
 // sstatus bits
 pub const SSTATUS_SIE: usize = 1 << 1; // supervisor interrupt enable

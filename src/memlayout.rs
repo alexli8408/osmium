@@ -1,7 +1,6 @@
 //! Physical memory map of QEMU's `virt` machine, plus the kernel's own
 //! layout as exported by linker.ld.
 //!
-//!   0x0010_0000  sifive_test   poweroff/reboot device
 //!   0x0c00_0000  PLIC          platform-level interrupt controller
 //!   0x1000_0000  UART0         NS16550A serial port
 //!   0x8000_0000  DRAM          first 2 MiB: OpenSBI firmware (PMP-guarded,
@@ -12,7 +11,6 @@
 
 pub const PAGE_SIZE: usize = 4096;
 
-pub const VIRT_TEST: usize = 0x10_0000;
 pub const PLIC: usize = 0x0c00_0000;
 pub const PLIC_SIZE: usize = 0x40_0000;
 pub const UART0: usize = 0x1000_0000;

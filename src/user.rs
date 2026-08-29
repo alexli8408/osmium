@@ -70,7 +70,7 @@ user_prog_trespasser:
     li      a1, 5f - 4f
     li      a7, 1                   # SYS_WRITE
     ecall
-    li      t0, 0x80000000          # kernel text: mapped without PTE_U
+    li      t0, 0x80200000          # kernel text: mapped without PTE_U
     ld      t1, 0(t0)               # load page fault -> kernel kills us
     # Never reached; if it were, this exit would report failure.
     li      a0, 1

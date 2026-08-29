@@ -11,7 +11,7 @@
 //! stacks, guard pages) can later change permissions in place.
 
 use crate::kalloc;
-use crate::memlayout::{self, PAGE_SIZE, PHYS_TOP, PLIC, PLIC_SIZE, UART0, VIRT_TEST};
+use crate::memlayout::{self, PAGE_SIZE, PHYS_TOP, PLIC, PLIC_SIZE, UART0};
 use crate::riscv::{satp, sfence_vma};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -149,10 +149,10 @@ fn kvmmake() -> usize {
     let kernel_end = memlayout::kernel_end();
 
     unsafe {
-        // Devices.
+        // Devices. (Power/reset needs no mapping anymore: it goes through
+        // the SBI, not a device write.)
         map_pages(root, UART0, UART0, PAGE_SIZE, PTE_R | PTE_W);
         map_pages(root, PLIC, PLIC, PLIC_SIZE, PTE_R | PTE_W);
-        map_pages(root, VIRT_TEST, VIRT_TEST, PAGE_SIZE, PTE_R | PTE_W);
 
         // Kernel image, tightest permissions per section.
         map_pages(

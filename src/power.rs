@@ -1,25 +1,32 @@
-//! Power control via QEMU virt's sifive_test device: a magic 32-bit write
-//! to 0x10_0000 makes QEMU exit (poweroff) or reset the machine.
+//! Power control via the SBI SRST (system reset) extension: shutdown and
+//! reboot are firmware services now, requested with an ecall instead of a
+//! magic write to the sifive_test device.
 
-use crate::memlayout::VIRT_TEST;
 use crate::riscv;
+use crate::sbi;
 
-const FINISHER_PASS: u32 = 0x5555; // exit code 0
-const FINISHER_RESET: u32 = 0x7777;
-
-pub fn poweroff() -> ! {
-    println!("power: goodbye");
-    unsafe { (VIRT_TEST as *mut u32).write_volatile(FINISHER_PASS) };
-    // Not reached under QEMU; belt-and-suspenders for anything else.
+fn reset(reset_type: usize, verb: &str) -> ! {
+    println!("power: {verb}");
+    if sbi::probe_srst() {
+        let ret = sbi::system_reset(reset_type, sbi::RESET_REASON_NONE);
+        // Only reachable if the firmware refused the request.
+        println!(
+            "power: firmware refused system reset: {}",
+            sbi::error_name(ret.error)
+        );
+    } else {
+        println!("power: firmware lacks the SBI SRST extension");
+    }
+    // No way to power off without the firmware; park the hart.
     loop {
         riscv::wfi();
     }
 }
 
+pub fn poweroff() -> ! {
+    reset(sbi::RESET_TYPE_SHUTDOWN, "goodbye")
+}
+
 pub fn reboot() -> ! {
-    println!("power: rebooting");
-    unsafe { (VIRT_TEST as *mut u32).write_volatile(FINISHER_RESET) };
-    loop {
-        riscv::wfi();
-    }
+    reset(sbi::RESET_TYPE_COLD_REBOOT, "rebooting")
 }

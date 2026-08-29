@@ -9,6 +9,7 @@ rustflags = [
     "-C", "code-model=medium",
 ]
 # `cargo run` boots the kernel in QEMU's `virt` machine.
-#   -bios none : no OpenSBI; our boot code starts in M-mode at 0x8000_0000
-#   -nographic : serial console on stdio (Ctrl-A X to quit)
-runner = "qemu-system-riscv64 -machine virt -cpu rv64 -m 128M -smp 1 -nographic -bios none -kernel"
+#   -bios default : QEMU's bundled OpenSBI firmware, which runs in M-mode
+#                   and enters the kernel in S-mode at 0x8020_0000
+#   -nographic    : serial console on stdio (Ctrl-A X to quit)
+runner = "qemu-system-riscv64 -machine virt -cpu rv64 -m 128M -smp 1 -nographic -bios default -kernel"

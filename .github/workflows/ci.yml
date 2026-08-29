@@ -11,8 +11,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install QEMU
-        run: sudo apt-get update && sudo apt-get install -y qemu-system-misc
+      - name: Install QEMU + OpenSBI firmware
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-misc opensbi
 
       # rust-toolchain.toml pins the channel, components, and the
       # riscv64gc-unknown-none-elf target; rustup picks it up automatically.

@@ -1,24 +1,23 @@
 # Osmium boot entry.
 #
-# With `-bios none`, QEMU's virt machine resets every hart into machine mode
-# at 0x8000_0000, which the linker script pins to this code. Registers hold
-# nothing useful except a0 = hartid (also in mhartid) and a1 = DTB pointer.
+# OpenSBI enters the kernel here in *supervisor* mode, at the payload
+# address the linker script pins this code to, with:
+#   a0 = hartid   (mhartid is M-mode-only; this is how S-mode learns it)
+#   a1 = pointer to the flattened device tree
+# Machine-mode setup — trap delegation, PMP, counter access — has already
+# been done by the firmware. Secondary harts are parked in OpenSBI's HSM
+# state machine and never arrive here unless explicitly started.
 #
-# Hart 0 zeroes .bss (the ELF loader does not), points sp at the boot stack,
-# and calls the Rust M-mode setup routine `start`. Secondary harts park in a
-# wfi loop; the kernel is single-hart for now.
+# Zero .bss (the ELF loader does not, and RAM survives a warm reboot),
+# point sp at the boot stack, stash the hartid in tp, and enter Rust.
+# The .bss loop uses only t-registers, so a0/a1 flow through to kmain
+# as its (hartid, dtb) arguments.
 
 .option norvc
 
 .section .text.entry
 .global _entry
 _entry:
-    csrr    t0, mhartid
-    bnez    t0, park
-
-    # Zero .bss. Both symbols are 16-byte aligned (linker.ld), so 8-byte
-    # stores never overrun. The boot stack lives in .bss but nothing is on
-    # it yet -- sp is only set after this loop.
     la      t0, __bss_start
     la      t1, __bss_end
 1:
@@ -28,14 +27,17 @@ _entry:
     j       1b
 2:
     la      sp, __boot_stack_top
-    call    start
+    mv      tp, a0
+    call    kmain
 
-park:
+# kmain never returns; trap if it somehow does.
+3:
     wfi
-    j       park
+    j       3b
 
-# Boot stack for hart 0. Lives in .bss (so it is inside the kernel image and
-# gets RW mapping for free); 64 KiB is plenty for boot + scheduler context.
+# Boot stack for the boot hart. Lives in .bss (so it is inside the kernel
+# image and gets RW mapping for free); 64 KiB is plenty for boot + the
+# scheduler context.
 .section .bss.stack
 .align 4
 .global __boot_stack

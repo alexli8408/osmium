@@ -1,9 +1,10 @@
 /*
  * Linker script for the Osmium kernel on qemu-system-riscv64 -machine virt.
  *
- * QEMU's virt machine puts DRAM at 0x8000_0000 and, with -bios none, starts
- * every hart at exactly that address. The .text.entry section (boot assembly)
- * must therefore be the first byte of the image.
+ * The kernel is an OpenSBI supervisor payload. DRAM starts at 0x8000_0000;
+ * the firmware owns the first 2 MiB and enters the next stage in S-mode at
+ * the conventional payload address 0x8020_0000, which .text.entry (the boot
+ * assembly) must occupy as the first byte of the image.
  *
  * Section boundaries are exported as symbols and page-aligned so the VM code
  * can map each region with the tightest possible permissions:
@@ -16,7 +17,7 @@
 OUTPUT_ARCH(riscv)
 ENTRY(_entry)
 
-BASE_ADDRESS = 0x80000000;
+BASE_ADDRESS = 0x80200000;
 
 SECTIONS
 {

@@ -41,19 +41,8 @@ macro_rules! csr {
     };
 }
 
-// Machine-level CSRs (only touched once, in `start`, before entering S-mode).
-csr!(mhartid, "mhartid");
-csr!(mstatus, "mstatus");
-csr!(mepc, "mepc");
-csr!(medeleg, "medeleg");
-csr!(mideleg, "mideleg");
-csr!(mcounteren, "mcounteren");
-csr!(pmpcfg0, "pmpcfg0");
-csr!(pmpaddr0, "pmpaddr0");
-// menvcfg is newer than LLVM's baseline CSR table; use its number.
-csr!(menvcfg, "0x30a");
-
-// Supervisor-level CSRs.
+// Supervisor-level CSRs only: machine mode belongs to the OpenSBI
+// firmware, and every M CSR would fault if touched from here.
 csr!(sstatus, "sstatus");
 csr!(sie, "sie");
 csr!(sip, "sip");
@@ -67,10 +56,6 @@ csr!(scounteren, "scounteren");
 // stimecmp is part of the Sstc extension; use its number.
 csr!(stimecmp, "0x14d");
 
-// mstatus bits
-pub const MSTATUS_MPP_MASK: usize = 3 << 11;
-pub const MSTATUS_MPP_S: usize = 1 << 11;
-
 // sstatus bits
 pub const SSTATUS_SIE: usize = 1 << 1; // supervisor interrupt enable
 pub const SSTATUS_SPIE: usize = 1 << 5; // SIE value restored by sret
@@ -81,9 +66,6 @@ pub const SSTATUS_SUM: usize = 1 << 18; // permit S-mode access to U pages
 pub const SIE_SSIE: usize = 1 << 1; // software
 pub const SIE_STIE: usize = 1 << 5; // timer
 pub const SIE_SEIE: usize = 1 << 9; // external
-
-// menvcfg bits
-pub const MENVCFG_STCE: usize = 1 << 63; // enable the Sstc extension
 
 // scause: top bit = interrupt, low bits = code
 pub const SCAUSE_INTERRUPT: usize = 1 << 63;
@@ -97,7 +79,8 @@ pub fn r_time() -> usize {
     x
 }
 
-/// Hart ID, stashed in `tp` by `start` because mhartid is M-mode-only.
+/// Hart ID, stashed in `tp` by entry.S from OpenSBI's a0 (mhartid is
+/// M-mode-only; the firmware handoff is how S-mode learns it).
 #[inline]
 pub fn cpu_id() -> usize {
     let x: usize;

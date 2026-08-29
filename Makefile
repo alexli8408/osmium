@@ -1,7 +1,7 @@
 KERNEL_DEV   = target/riscv64gc-unknown-none-elf/debug/osmium
 KERNEL_REL   = target/riscv64gc-unknown-none-elf/release/osmium
 QEMU         = qemu-system-riscv64
-QEMU_FLAGS   = -machine virt -cpu rv64 -m 128M -smp 1 -nographic -bios none
+QEMU_FLAGS   = -machine virt -cpu rv64 -m 128M -smp 1 -nographic -bios default
 
 .PHONY: build release run run-release test gdb objdump clean
 

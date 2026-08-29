@@ -1,10 +1,13 @@
-//! Osmium: a RISC-V (RV64GC) kernel for QEMU's virt machine.
+//! Osmium: a RISC-V (RV64GC) kernel for QEMU's virt machine, running as an
+//! OpenSBI supervisor payload.
 //!
-//! Boot flow: QEMU resets into `_entry` (entry.S) in machine mode, which
-//! calls `start` below. `start` does the minimum M-mode configuration —
-//! delegate traps to S-mode, open the PMP, enable the Sstc timer extension —
-//! then fakes a trap return into supervisor mode at `kmain`. Everything
-//! after that runs in S-mode.
+//! Boot flow: QEMU resets into OpenSBI, which owns machine mode — it
+//! delegates traps to S-mode, programs the PMP, and enables timer/counter
+//! access — then enters `_entry` (entry.S) in *supervisor* mode at the
+//! payload address with a0 = hartid and a1 = the device-tree pointer.
+//! `_entry` zeroes .bss, sets the boot stack, and calls `kmain`. Services
+//! that need machine mode (timer, reset) are requested from the firmware
+//! through the SBI (sbi.rs).
 
 #![no_std]
 #![no_main]
@@ -42,56 +45,29 @@ mod vm;
 
 use riscv::*;
 
-/// M-mode setup, called from entry.S on the boot stack. Never returns; it
-/// `mret`s into `kmain` in S-mode.
+/// Supervisor-mode entry point, called from entry.S with OpenSBI's handoff
+/// arguments (the hartid is also stashed in tp for cpu_id()).
 #[unsafe(no_mangle)]
-extern "C" fn start() -> ! {
-    unsafe {
-        // Tell mret where to go and in which privilege: S-mode, at kmain.
-        let m = (mstatus::read() & !MSTATUS_MPP_MASK) | MSTATUS_MPP_S;
-        mstatus::write(m);
-        mepc::write(kmain as *const () as usize);
-
-        // Paging off until the VM module builds a page table.
-        satp::write(0);
-
-        // Route all exceptions and interrupts to S-mode handlers.
-        medeleg::write(0xffff);
-        mideleg::write(0xffff);
-        sie::set(SIE_SEIE | SIE_STIE | SIE_SSIE);
-
-        // PMP: without at least one matching entry, S-mode gets an access
-        // fault on every memory reference. One TOR entry covering the whole
-        // 56-bit physical space with RWX opens it up.
-        pmpaddr0::write(0x3f_ffff_ffff_ffff);
-        pmpcfg0::write(0xf);
-
-        // Sstc: let S-mode program its own timer through the stimecmp CSR
-        // (no M-mode trampoline needed). Park it at "never" for now, and
-        // let S-mode (and later U-mode) read cycle/time/instret.
-        menvcfg::set(MENVCFG_STCE);
-        mcounteren::set(0b111);
-        stimecmp::write(usize::MAX);
-
-        // S-mode cannot read mhartid; carry the hart ID in tp.
-        asm!("csrr tp, mhartid");
-
-        asm!("mret", options(noreturn));
-    }
-}
-
-/// Supervisor-mode entry point.
-#[unsafe(no_mangle)]
-extern "C" fn kmain() -> ! {
+extern "C" fn kmain(hartid: usize, dtb: usize) -> ! {
     uart::init();
     println!();
-    println!("osmium kernel booting on hart {}", cpu_id());
+    println!("osmium kernel booting on hart {hartid} (dtb at {dtb:#x})");
+    let (major, minor) = sbi::spec_version();
+    println!(
+        "  sbi: v{major}.{minor} via {} (impl version {:#x})",
+        sbi::impl_name(sbi::impl_id()),
+        sbi::impl_version(),
+    );
     println!(
         "  kernel image: {:#x}..{:#x} ({} KiB)",
         memlayout::kernel_start(),
         memlayout::kernel_end(),
         (memlayout::kernel_end() - memlayout::kernel_start()) / 1024
     );
+
+    // Firmware delegated the traps; enabling the supervisor interrupt
+    // *classes* (external, timer, software) is our job.
+    unsafe { sie::set(SIE_SEIE | SIE_STIE | SIE_SSIE) };
 
     trap::init();
     println!("  traps: stvec -> kernelvec");
@@ -101,7 +77,21 @@ extern "C" fn kmain() -> ! {
     unsafe { asm!("ebreak") };
     println!("  traps: survived an ebreak round-trip");
 
-    kalloc::init();
+    // QEMU parks the flattened device tree near the top of RAM — inside the
+    // page allocator's range. Read its header (big-endian magic 0xd00dfeed,
+    // then totalsize) and keep the allocator off it.
+    let dtb_reserved = {
+        let magic = u32::from_be(unsafe { (dtb as *const u32).read_volatile() });
+        if dtb >= memlayout::DRAM_BASE && magic == 0xd00d_feed {
+            let size = u32::from_be(unsafe { ((dtb + 4) as *const u32).read_volatile() }) as usize;
+            println!("  dtb: reserving {size} bytes at {dtb:#x}");
+            Some((dtb, dtb + size))
+        } else {
+            println!("  dtb: no valid device tree at {dtb:#x}; nothing reserved");
+            None
+        }
+    };
+    kalloc::init(dtb_reserved);
     println!(
         "  kalloc: {} free pages ({} MiB)",
         kalloc::free_pages(),

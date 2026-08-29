@@ -4,7 +4,9 @@
 //!   0x0010_0000  sifive_test   poweroff/reboot device
 //!   0x0c00_0000  PLIC          platform-level interrupt controller
 //!   0x1000_0000  UART0         NS16550A serial port
-//!   0x8000_0000  DRAM          kernel image, then heap, then free pages
+//!   0x8000_0000  DRAM          first 2 MiB: OpenSBI firmware (PMP-guarded,
+//!                              never mapped); 0x8020_0000: kernel image,
+//!                              then heap, then free pages
 
 #![allow(dead_code)]
 

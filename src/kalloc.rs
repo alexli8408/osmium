@@ -32,12 +32,21 @@ static KMEM: SpinLock<FreeList> = SpinLock::new(
 );
 
 /// Hand every page between the end of the kernel heap and the top of DRAM
-/// to the free list. Called once at boot.
-pub fn init() {
+/// to the free list, skipping any page overlapping `reserved` (start, end).
+/// QEMU parks the flattened device tree near the top of RAM; without the
+/// exclusion the allocator would poison and hand out the firmware's DTB.
+/// Called once at boot.
+pub fn init(reserved: Option<(usize, usize)>) {
+    let (res_start, res_end) = match reserved {
+        Some((s, e)) => (s & !(PAGE_SIZE - 1), e.next_multiple_of(PAGE_SIZE)),
+        None => (0, 0),
+    };
     let start = memlayout::alloc_start().next_multiple_of(PAGE_SIZE);
     let mut page = start;
     while page + PAGE_SIZE <= PHYS_TOP {
-        unsafe { free(page) };
+        if page >= res_end || page + PAGE_SIZE <= res_start {
+            unsafe { free(page) };
+        }
         page += PAGE_SIZE;
     }
 }

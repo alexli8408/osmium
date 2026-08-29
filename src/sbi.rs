@@ -127,8 +127,6 @@ pub fn set_timer(when: usize) {
 
 pub const RESET_TYPE_SHUTDOWN: usize = 0;
 pub const RESET_TYPE_COLD_REBOOT: usize = 1;
-#[allow(dead_code)] // part of the SRST ABI; the kernel only cold-reboots
-pub const RESET_TYPE_WARM_REBOOT: usize = 2;
 pub const RESET_REASON_NONE: usize = 0;
 
 /// Ask the firmware to reset the system. On success this never returns; a

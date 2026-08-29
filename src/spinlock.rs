@@ -55,8 +55,6 @@ pub fn set_intena(value: bool) {
 
 pub struct SpinLock<T> {
     locked: AtomicBool,
-    #[allow(dead_code)] // diagnostics
-    name: &'static str,
     value: UnsafeCell<T>,
 }
 
@@ -65,10 +63,9 @@ unsafe impl<T: Send> Sync for SpinLock<T> {}
 unsafe impl<T: Send> Send for SpinLock<T> {}
 
 impl<T> SpinLock<T> {
-    pub const fn new(name: &'static str, value: T) -> Self {
+    pub const fn new(value: T) -> Self {
         SpinLock {
             locked: AtomicBool::new(false),
-            name,
             value: UnsafeCell::new(value),
         }
     }
@@ -83,12 +80,6 @@ impl<T> SpinLock<T> {
             core::hint::spin_loop();
         }
         SpinLockGuard { lock: self }
-    }
-
-    /// Name given at construction; used in diagnostics.
-    #[allow(dead_code)]
-    pub fn name(&self) -> &'static str {
-        self.name
     }
 }
 

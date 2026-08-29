@@ -4,16 +4,18 @@
 //! call sites read like `sstatus::set(sstatus::SIE)`. Writes are `unsafe`:
 //! most CSRs can break memory safety (satp, stvec, ...) when misused.
 
-#![allow(dead_code)]
-
 use core::arch::asm;
 
+// Every CSR gets the uniform read/write/set/clear quartet; not every
+// variant has a caller, so the generated functions carry the allow. CSR
+// modules with *no* callers at all should be deleted, and are not shielded.
 macro_rules! csr {
     ($name:ident, $csr:expr) => {
         pub mod $name {
             #[allow(unused_imports)]
             use super::*;
 
+            #[allow(dead_code)]
             #[inline]
             pub fn read() -> usize {
                 let x: usize;
@@ -21,18 +23,21 @@ macro_rules! csr {
                 x
             }
 
+            #[allow(dead_code)]
             #[inline]
             pub unsafe fn write(x: usize) {
                 unsafe { core::arch::asm!(concat!("csrw ", $csr, ", {0}"), in(reg) x) };
             }
 
             /// Set the bits in `mask` (csrs).
+            #[allow(dead_code)]
             #[inline]
             pub unsafe fn set(mask: usize) {
                 unsafe { core::arch::asm!(concat!("csrs ", $csr, ", {0}"), in(reg) mask) };
             }
 
             /// Clear the bits in `mask` (csrc).
+            #[allow(dead_code)]
             #[inline]
             pub unsafe fn clear(mask: usize) {
                 unsafe { core::arch::asm!(concat!("csrc ", $csr, ", {0}"), in(reg) mask) };
@@ -45,14 +50,12 @@ macro_rules! csr {
 // firmware, and every M CSR would fault if touched from here.
 csr!(sstatus, "sstatus");
 csr!(sie, "sie");
-csr!(sip, "sip");
 csr!(sepc, "sepc");
 csr!(stvec, "stvec");
 csr!(scause, "scause");
 csr!(stval, "stval");
 csr!(satp, "satp");
 csr!(sscratch, "sscratch");
-csr!(scounteren, "scounteren");
 
 // sstatus bits
 pub const SSTATUS_SIE: usize = 1 << 1; // supervisor interrupt enable
@@ -60,7 +63,7 @@ pub const SSTATUS_SPIE: usize = 1 << 5; // SIE value restored by sret
 pub const SSTATUS_SPP: usize = 1 << 8; // privilege sret returns to (0 = U)
 pub const SSTATUS_SUM: usize = 1 << 18; // permit S-mode access to U pages
 
-// sie / sip bits
+// sie bits
 pub const SIE_SSIE: usize = 1 << 1; // software
 pub const SIE_STIE: usize = 1 << 5; // timer
 pub const SIE_SEIE: usize = 1 << 9; // external
@@ -74,15 +77,6 @@ pub const SCAUSE_INTERRUPT: usize = 1 << 63;
 pub fn r_time() -> usize {
     let x: usize;
     unsafe { asm!("rdtime {0}", out(reg) x) };
-    x
-}
-
-/// Hart ID, stashed in `tp` by entry.S from OpenSBI's a0 (mhartid is
-/// M-mode-only; the firmware handoff is how S-mode learns it).
-#[inline]
-pub fn cpu_id() -> usize {
-    let x: usize;
-    unsafe { asm!("mv {0}, tp", out(reg) x) };
     x
 }
 

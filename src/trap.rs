@@ -58,8 +58,6 @@ pub fn init() {
 }
 
 // Interrupt causes (scause with the interrupt bit set).
-#[allow(dead_code)]
-const IRQ_S_SOFT: usize = 1;
 const IRQ_S_TIMER: usize = 5;
 const IRQ_S_EXTERNAL: usize = 9;
 

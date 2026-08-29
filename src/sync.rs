@@ -20,7 +20,7 @@ pub struct Semaphore {
 impl Semaphore {
     pub const fn new(initial: usize) -> Self {
         Semaphore {
-            count: SpinLock::new("sem", initial),
+            count: SpinLock::new(initial),
         }
     }
 
@@ -72,7 +72,7 @@ impl<T> Channel<T> {
     /// A channel that holds at most `capacity` items.
     pub const fn new(capacity: usize) -> Self {
         Channel {
-            buf: SpinLock::new("chan", VecDeque::new()),
+            buf: SpinLock::new(VecDeque::new()),
             empty: Semaphore::new(capacity),
             full: Semaphore::new(0),
         }

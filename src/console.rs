@@ -21,7 +21,7 @@ impl Write for Console {
     }
 }
 
-static CONSOLE: SpinLock<Console> = SpinLock::new("console", Console);
+static CONSOLE: SpinLock<Console> = SpinLock::new(Console);
 
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {
@@ -47,14 +47,11 @@ struct Input {
     w: usize,
 }
 
-static INPUT: SpinLock<Input> = SpinLock::new(
-    "input",
-    Input {
-        buf: [0; INPUT_CAP],
-        r: 0,
-        w: 0,
-    },
-);
+static INPUT: SpinLock<Input> = SpinLock::new(Input {
+    buf: [0; INPUT_CAP],
+    r: 0,
+    w: 0,
+});
 
 /// Called from the UART interrupt for each received byte. Stores raw bytes
 /// (terminal CR normalized to NL); echo and line editing are the reader's

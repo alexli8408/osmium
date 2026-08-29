@@ -46,7 +46,7 @@ mod vm;
 use riscv::*;
 
 /// Supervisor-mode entry point, called from entry.S with OpenSBI's handoff
-/// arguments (the hartid is also stashed in tp for cpu_id()).
+/// arguments.
 #[unsafe(no_mangle)]
 extern "C" fn kmain(hartid: usize, dtb: usize) -> ! {
     uart::init();

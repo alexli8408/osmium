@@ -7,8 +7,6 @@
 //!                              never mapped); 0x8020_0000: kernel image,
 //!                              then heap, then free pages
 
-#![allow(dead_code)]
-
 pub const PAGE_SIZE: usize = 4096;
 
 pub const PLIC: usize = 0x0c00_0000;
@@ -35,7 +33,6 @@ unsafe extern "C" {
     static __rodata_start: u8;
     static __rodata_end: u8;
     static __data_start: u8;
-    static __bss_end: u8;
     static __kernel_end: u8;
 }
 
@@ -56,7 +53,6 @@ link_addr!(user_end, __user_end);
 link_addr!(rodata_start, __rodata_start);
 link_addr!(rodata_end, __rodata_end);
 link_addr!(data_start, __data_start);
-link_addr!(bss_end, __bss_end);
 link_addr!(kernel_end, __kernel_end);
 
 /// First byte of the kernel heap.

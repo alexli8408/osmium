@@ -23,13 +23,10 @@ struct FreeNode {
     next: *mut FreeNode,
 }
 
-static KMEM: SpinLock<FreeList> = SpinLock::new(
-    "kmem",
-    FreeList {
-        head: ptr::null_mut(),
-        free_pages: 0,
-    },
-);
+static KMEM: SpinLock<FreeList> = SpinLock::new(FreeList {
+    head: ptr::null_mut(),
+    free_pages: 0,
+});
 
 /// Hand every page between the end of the kernel heap and the top of DRAM
 /// to the free list, skipping any page overlapping `reserved` (start, end).

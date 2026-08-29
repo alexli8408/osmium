@@ -20,7 +20,7 @@ struct Fs {
     files: Vec<File>,
 }
 
-static FS: SpinLock<Fs> = SpinLock::new("fs", Fs { files: Vec::new() });
+static FS: SpinLock<Fs> = SpinLock::new(Fs { files: Vec::new() });
 
 /// Populate the filesystem with its built-in files. Called once at boot.
 pub fn init() {

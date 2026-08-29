@@ -9,9 +9,9 @@
 # state machine and never arrive here unless explicitly started.
 #
 # Zero .bss (the ELF loader does not, and RAM survives a warm reboot),
-# point sp at the boot stack, stash the hartid in tp, and enter Rust.
-# The .bss loop uses only t-registers, so a0/a1 flow through to kmain
-# as its (hartid, dtb) arguments.
+# point sp at the boot stack, and enter Rust. The .bss loop uses only
+# t-registers, so a0/a1 flow through to kmain as its (hartid, dtb)
+# arguments.
 
 .option norvc
 
@@ -27,7 +27,6 @@ _entry:
     j       1b
 2:
     la      sp, __boot_stack_top
-    mv      tp, a0
     call    kmain
 
 # kmain never returns; trap if it somehow does.

@@ -44,13 +44,10 @@ struct Heap {
 
 unsafe impl Send for Heap {}
 
-static HEAP: SpinLock<Heap> = SpinLock::new(
-    "heap",
-    Heap {
-        head: ptr::null_mut(),
-        free_bytes: 0,
-    },
-);
+static HEAP: SpinLock<Heap> = SpinLock::new(Heap {
+    head: ptr::null_mut(),
+    free_bytes: 0,
+});
 
 const fn align_up(x: usize, align: usize) -> usize {
     (x + align - 1) & !(align - 1)

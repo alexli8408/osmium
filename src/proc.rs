@@ -68,7 +68,6 @@ pub enum State {
 
 pub struct Process {
     pub pid: usize,
-    #[allow(dead_code)] // read by process_list for the shell's ps
     pub name: &'static str,
     pub state: State,
     context: Context,
@@ -605,7 +604,6 @@ pub fn current_pid() -> usize {
 }
 
 /// Snapshot of (pid, name, state) for diagnostics (the shell's `ps`).
-#[allow(dead_code)] // the shell arrives shortly
 pub fn process_list() -> Vec<(usize, &'static str, State)> {
     push_off();
     let sched = unsafe { sched_data() };

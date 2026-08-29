@@ -107,24 +107,6 @@ pub unsafe fn map_pages(root: usize, va: usize, pa: usize, size: usize, perm: us
     }
 }
 
-/// Rewrite the permission bits of already-mapped leaf PTEs in
-/// [va, va+size). Used to grant U-mode access to pages inside the kernel's
-/// big RAM mapping (user stacks) without remapping them.
-///
-/// # Safety
-/// Same contract as [`map_pages`]; the range must already be fully mapped.
-#[allow(dead_code)] // general VM primitive; not currently on any hot path
-pub unsafe fn protect(root: usize, va: usize, size: usize, perm: usize) {
-    assert!(va.is_multiple_of(PAGE_SIZE) && size.is_multiple_of(PAGE_SIZE));
-    for off in (0..size).step_by(PAGE_SIZE) {
-        let pte_ptr = unsafe { walk(root, va + off, false) }.expect("protect: unmapped va");
-        let pte = unsafe { *pte_ptr };
-        assert!(pte & PTE_V != 0, "protect: invalid pte at {:#x}", va + off);
-        unsafe { *pte_ptr = (pte & !PERM_MASK) | perm };
-    }
-    sfence_vma();
-}
-
 /// Software page-table walk: VA -> (PA, leaf PTE). For tests & diagnostics.
 pub fn translate(root: usize, va: usize) -> Option<(usize, usize)> {
     let pte_ptr = unsafe { walk(root, va, false) }?;

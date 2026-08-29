@@ -1,24 +1,35 @@
 # Osmium
 
 A RISC-V (RV64GC) operating system kernel written from scratch in Rust — no
-external crates, no `libc`, no pre-built bootloader, no `unsafe` shortcuts
-around real hardware protocols. It boots on QEMU's `virt` machine straight
-out of reset in machine mode and ends up running preemptively-scheduled
-processes in user mode behind hardware memory protection.
+external crates, no `libc`, no `unsafe` shortcuts around real hardware
+protocols. It boots on QEMU's `virt` machine as an **OpenSBI supervisor
+payload** — the same firmware contract Linux uses — and ends up running
+preemptively-scheduled processes in user mode behind hardware memory
+protection.
+
+(Earlier in its history the kernel *was* its own firmware: it started at
+the reset vector in machine mode with `-bios none` and did its own trap
+delegation, PMP, and timer setup before dropping to S-mode. The git
+history keeps that phase; the transition to OpenSBI replaced all of it
+with the SBI firmware interface below.)
 
 > Osmium: the densest naturally occurring metal. Chemical symbol **Os**.
 
 ## Features
 
-- **M-mode boot** — starts at the reset vector with `-bios none`, does its
-  own firmware work (trap delegation, PMP, Sstc enable), and `mret`s into
-  supervisor mode
+- **OpenSBI supervisor payload** — enters in S-mode at `0x8020_0000` with
+  the standard firmware handoff (`a0` = hartid, `a1` = device tree), like a
+  production RISC-V OS; the DTB the firmware hands over is header-parsed
+  and reserved out of the page allocator
+- **An SBI client** (`sbi.rs`) — the ecall calling convention plus the
+  Base (discovery/probing), TIME, and SRST extensions; the kernel
+  identifies its firmware at boot and requests M-mode services through it
 - **NS16550A UART driver** with polled transmit and interrupt-driven receive
 - **Trap handling** — a single S-mode vector for exceptions, interrupts, and
   syscalls, with an `sscratch` protocol that safely takes traps arriving
   from either kernel or user code
-- **Timer interrupts** at 100 Hz via the Sstc extension (`stimecmp`), no
-  M-mode trampoline needed
+- **Timer interrupts** at 100 Hz via `sbi_set_timer` — arming through the
+  firmware also acknowledges the pending interrupt
 - **Physical page allocator** — intrusive free list threaded through the
   free pages themselves; zero metadata overhead, poison-on-free
 - **Sv39 virtual memory** — three-level page tables built by hand. The
@@ -78,23 +89,33 @@ processes in user mode behind hardware memory protection.
 ## Demo
 
 ```
-osmium kernel booting on hart 0
-  kernel image: 0x80000000..0x8002c000 (176 KiB)
+OpenSBI v1.7
+   ____                    _____ ____ _____
+  / __ \                  / ____|  _ \_   _|
+ | |  | |_ __   ___ _ __ | (___ | |_) || |
+ | |  | | '_ \ / _ \ '_ \ \___ \|  _ < | |
+ | |__| | |_) |  __/ | | |____) | |_) || |_
+  \____/| .__/ \___|_| |_|_____/|____/_____|
+[... firmware banner ...]
+
+osmium kernel booting on hart 0 (dtb at 0x87e00000)
+  sbi: v3.0 via OpenSBI (impl version 0x10007)
+  kernel image: 0x80200000..0x80230000 (192 KiB)
   traps: stvec -> kernelvec
   traps: survived an ebreak round-trip
-  kalloc: 30676 free pages (119 MiB)
+  dtb: reserving 6084 bytes at 0x87e00000
+  kalloc: 30158 free pages (117 MiB)
   kalloc: alloc/free self-test ok
   vm: sv39 paging on (root table 0x87ffe000)
   vm: translation self-test ok
   heap: 8192 KiB free, Box/Vec/String self-test ok
   fs: ramfs mounted, 3 files
   plic: routing uart irq 10 to hart 0
-  timer: 100 Hz ticks running, uptime 179 ms
+  timer: 100 Hz ticks running, uptime 197 ms
   proc: entering scheduler
   thread ping (pid 1): round 0
 user: trespasser about to touch kernel memory...
-trap: killing pid 7: load page fault at sepc=0x80013096 stval=0x80000000
-trap: breakpoint at 0x800130e0 (U-mode)
+trap: killing pid 9: load page fault at sepc=0x40000018 stval=0x80200000
 osmium 0.1.0 riscv64
 welcome to osmium -- a RISC-V kernel in Rust
 user: badsys survived; kernel rejected hostile args
@@ -138,7 +159,8 @@ its image with the uname program.
 
 Requirements: stable Rust (the pinned toolchain installs the
 `riscv64gc-unknown-none-elf` target automatically) and `qemu-system-riscv64`
-(≥ 7.0 for the Sstc extension).
+with its bundled OpenSBI firmware (`-bios default`; ships with QEMU, and on
+Debian/Ubuntu also via the `opensbi` package).
 
 ```sh
 make run        # build + boot with the console on stdio (Ctrl-A X quits)
@@ -153,27 +175,31 @@ make objdump    # disassemble the kernel
 
 ```
 QEMU reset (M-mode, 0x80000000)
-  └─ entry.S      park secondary harts, zero .bss, set boot stack
-      └─ start()  M-mode Rust: delegate traps, open PMP, enable Sstc, mret
-          └─ kmain()  S-mode: drivers + allocators + VM + self-tests
-              └─ scheduler()  runs threads; init becomes the shell
-                  └─ sret     user processes at U-privilege
+  └─ OpenSBI      firmware: delegate traps, program PMP, provide SBI services
+      └─ entry.S  entered in S-mode at 0x80200000, a0=hartid a1=dtb;
+         │        zero .bss, set boot stack
+         └─ kmain()  drivers + allocators + VM + self-tests
+             └─ scheduler()  runs threads; init becomes the shell
+                 └─ sret     user processes at U-privilege
+                      └─ ecall … up to the kernel (syscalls)
+                           and from the kernel up to OpenSBI (timer, reset)
 ```
 
 ### Memory map (QEMU virt + kernel layout)
 
 | Address        | What                                | Mapping    |
 | -------------- | ----------------------------------- | ---------- |
-| `0x0010_0000`  | sifive_test (poweroff/reboot)       | RW-        |
 | `0x0c00_0000`  | PLIC                                | RW-        |
 | `0x1000_0000`  | UART0 (NS16550A)                    | RW-        |
 | `0x4000_0000`  | user code / stack (per process)     | R-X/RW **+U** |
-| `0x8000_0000`  | kernel `.text`                      | R-X        |
+| `0x8000_0000`  | OpenSBI firmware (2 MiB, PMP-guarded) | unmapped |
+| `0x8020_0000`  | kernel `.text`                      | R-X        |
 | …              | `.user` (program images, source)    | R--        |
 | …              | `.rodata`                           | R--        |
 | …              | `.data`, `.bss`, boot stack         | RW-        |
 | kernel end     | kernel heap (8 MiB)                 | RW-        |
-| heap end       | page allocator pool (~119 MiB)      | RW-        |
+| heap end       | page allocator pool (~117 MiB)      | RW-        |
+| `0x87e0_0000`  | flattened device tree (reserved)    | RW-        |
 | `0x8800_0000`  | top of DRAM (`-m 128M`)             |            |
 
 The kernel is identity-mapped (VA = PA) at 4 KiB granularity, which keeps
@@ -187,16 +213,17 @@ when the process is reaped.
 
 | File                 | Contents                                             |
 | -------------------- | ---------------------------------------------------- |
-| `src/entry.S`        | reset-vector assembly, boot stack                    |
-| `src/main.rs`        | M-mode `start`, S-mode `kmain`, boot self-tests      |
-| `src/riscv.rs`       | zero-cost CSR accessors (macro-generated)            |
+| `src/entry.S`        | S-mode payload entry (OpenSBI handoff), boot stack   |
+| `src/main.rs`        | `kmain`: init order, DTB reservation, boot self-tests |
+| `src/sbi.rs`         | SBI client: Base/TIME/SRST extensions over ecall     |
+| `src/riscv.rs`       | zero-cost CSR accessors (macro-generated, S-level)   |
 | `src/memlayout.rs`   | physical map constants, linker-symbol accessors      |
 | `src/uart.rs`        | NS16550A driver                                      |
 | `src/console.rs`     | `println!` machinery + interrupt-fed input ring      |
 | `src/spinlock.rs`    | interrupt-safe spinlock (push_off/pop_off nesting)   |
 | `src/kernelvec.S`    | trap vector: build TrapFrame, dispatch, sret         |
 | `src/trap.rs`        | exception/interrupt dispatch, user-fault isolation   |
-| `src/timer.rs`       | Sstc timer, ticks, `sleep_ticks`                     |
+| `src/timer.rs`       | SBI timer, ticks, `sleep_ticks`                      |
 | `src/kalloc.rs`      | physical page allocator                              |
 | `src/vm.rs`          | Sv39 page tables, kernel + per-process address spaces |
 | `src/heap.rs`        | `GlobalAlloc` free-list heap                         |
@@ -209,10 +236,20 @@ when the process is reaped.
 | `src/fs.rs`          | flat read-only in-memory filesystem                  |
 | `src/user.rs`        | embedded U-mode programs (incl. the userland shell)  |
 | `src/shell.rs`       | interactive kernel console shell                     |
-| `src/power.rs`       | sifive_test poweroff/reboot                          |
+| `src/power.rs`       | SBI SRST poweroff/reboot                             |
 
 ## Design notes
 
+- **Why run on OpenSBI?** Because that's the real-world contract: on
+  RISC-V, machine mode belongs to firmware and the OS is an S-mode payload
+  that requests M-mode services (timer, reset, inter-processor interrupts)
+  through the SBI — Linux boots exactly this way. Osmium's git history
+  contains both worlds: first a hand-rolled M-mode firmware phase (which
+  teaches what OpenSBI actually does), then this transition, which deleted
+  every machine-level CSR from the kernel and replaced the privileged
+  machinery with a ~140-line SBI client. The privilege stack is now
+  honest: U-mode ecalls up to the kernel, and the kernel ecalls up to
+  firmware.
 - **Identity-mapped kernel, private user spaces.** The kernel is identity-
   mapped (virtual = physical), which sidesteps the classic trampoline
   problem: because every process page table *also* contains the full

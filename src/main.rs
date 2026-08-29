@@ -29,6 +29,7 @@ mod plic;
 mod power;
 mod proc;
 mod riscv;
+mod sbi;
 mod shell;
 mod spinlock;
 mod sync;
